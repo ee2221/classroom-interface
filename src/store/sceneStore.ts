@@ -1,5 +1,32 @@
 import { create } from 'zustand';
 import * as THREE from 'three';
+import {
+  saveObject,
+  updateObject,
+  deleteObject,
+  saveGroup,
+  updateGroup,
+  deleteGroup,
+  saveLight,
+  updateLight,
+  deleteLight,
+  saveScene,
+  updateScene,
+  getObjects,
+  getGroups,
+  getLights,
+  getScenes,
+  objectToFirestore,
+  firestoreToObject,
+  subscribeToObjects,
+  subscribeToGroups,
+  subscribeToLights,
+  clearProjectData as clearFirestoreProjectData,
+  type FirestoreObject,
+  type FirestoreGroup,
+  type FirestoreLight,
+  type FirestoreScene
+} from '../services/firestoreService';
 
 type EditMode = 'vertex' | 'edge' | null;
 type CameraPerspective = 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
@@ -54,6 +81,8 @@ interface HistoryState {
 interface SceneState {
   // Current project context
   currentProjectId: string | null;
+  currentUserId: string | null;
+  isLoading: boolean;
   
   objects: Array<{
     id: string;
@@ -109,9 +138,10 @@ interface SceneState {
   hasUnsavedChanges: boolean;
   
   // Project management
-  setCurrentProject: (projectId: string | null) => void;
+  setCurrentProject: (projectId: string | null, userId?: string | null) => void;
   clearProjectData: () => void;
   loadProjectData: (projectId: string, userId: string) => Promise<void>;
+  saveProjectData: () => Promise<void>;
   
   addObject: (object: THREE.Object3D, name: string) => void;
   removeObject: (id: string) => void;
@@ -219,6 +249,8 @@ const createLight = (type: 'directional' | 'point' | 'spot', position: number[],
 export const useSceneStore = create<SceneState>((set, get) => ({
   // Current project context
   currentProjectId: null,
+  currentUserId: null,
+  isLoading: false,
   
   objects: [],
   groups: [],
@@ -259,13 +291,24 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   hasUnsavedChanges: false,
 
   // Project management functions
-  setCurrentProject: (projectId) => {
+  setCurrentProject: async (projectId, userId = null) => {
     const currentProjectId = get().currentProjectId;
     
     // Only clear and reset if switching to a different project
     if (currentProjectId !== projectId) {
+      // Save current project data before switching (if we have a project)
+      if (currentProjectId && get().currentUserId && get().hasUnsavedChanges) {
+        try {
+          await get().saveProjectData();
+        } catch (error) {
+          console.error('Failed to save current project before switching:', error);
+        }
+      }
+
       set({
         currentProjectId: projectId,
+        currentUserId: userId,
+        isLoading: !!projectId, // Set loading if we're switching to a project
         // Clear all project-specific data when switching projects
         objects: [],
         groups: [],
@@ -301,11 +344,25 @@ export const useSceneStore = create<SceneState>((set, get) => ({
           hideAllMenus: false
         }
       });
+
+      // Load the new project data if we have both projectId and userId
+      if (projectId && userId) {
+        try {
+          await get().loadProjectData(projectId, userId);
+        } catch (error) {
+          console.error('Failed to load project data:', error);
+          set({ isLoading: false });
+        }
+      } else {
+        set({ isLoading: false });
+      }
     }
   },
 
   clearProjectData: () => {
     set({
+      currentProjectId: null,
+      currentUserId: null,
       objects: [],
       groups: [],
       lights: [],
@@ -333,16 +390,215 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   },
 
   loadProjectData: async (projectId, userId) => {
-    // This function would load project-specific data from Firestore
-    // For now, it just sets the current project
-    get().setCurrentProject(projectId);
+    set({ isLoading: true });
     
-    // In a full implementation, this would:
-    // 1. Load objects, groups, lights, and scenes from Firestore for this project
-    // 2. Reconstruct THREE.js objects from the stored data
-    // 3. Update the scene store with the loaded data
+    try {
+      console.log(`Loading project data for project: ${projectId}, user: ${userId}`);
+      
+      // Load all project data from Firestore
+      const [firestoreObjects, firestoreGroups, firestoreLights, firestoreScenes] = await Promise.all([
+        getObjects(userId, projectId),
+        getGroups(userId, projectId),
+        getLights(userId, projectId),
+        getScenes(userId, projectId)
+      ]);
+
+      // Convert Firestore objects back to THREE.js objects
+      const objects = firestoreObjects.map(firestoreObj => {
+        const threeObject = firestoreToObject(firestoreObj);
+        if (threeObject && firestoreObj.id) {
+          return {
+            id: firestoreObj.id,
+            object: threeObject,
+            name: firestoreObj.name,
+            visible: firestoreObj.visible,
+            locked: firestoreObj.locked,
+            groupId: firestoreObj.groupId
+          };
+        }
+        return null;
+      }).filter(Boolean) as Array<{
+        id: string;
+        object: THREE.Object3D;
+        name: string;
+        visible: boolean;
+        locked: boolean;
+        groupId?: string;
+      }>;
+
+      // Convert Firestore groups
+      const groups: Group[] = firestoreGroups.map(firestoreGroup => ({
+        id: firestoreGroup.id!,
+        name: firestoreGroup.name,
+        expanded: firestoreGroup.expanded,
+        visible: firestoreGroup.visible,
+        locked: firestoreGroup.locked,
+        objectIds: firestoreGroup.objectIds
+      }));
+
+      // Convert Firestore lights and create THREE.js light objects
+      const lights: Light[] = firestoreLights.map(firestoreLight => ({
+        id: firestoreLight.id!,
+        name: firestoreLight.name,
+        type: firestoreLight.type,
+        position: firestoreLight.position,
+        target: firestoreLight.target,
+        intensity: firestoreLight.intensity,
+        color: firestoreLight.color,
+        visible: firestoreLight.visible,
+        castShadow: firestoreLight.castShadow,
+        distance: firestoreLight.distance,
+        decay: firestoreLight.decay,
+        angle: firestoreLight.angle,
+        penumbra: firestoreLight.penumbra,
+        object: createLight(firestoreLight.type, firestoreLight.position, firestoreLight.target)
+      }));
+
+      // Load scene settings if available
+      let sceneSettings = get().sceneSettings;
+      let cameraPerspective: CameraPerspective = 'perspective';
+      let cameraZoom = 1;
+
+      if (firestoreScenes.length > 0) {
+        const latestScene = firestoreScenes[0]; // Get the most recent scene
+        sceneSettings = {
+          backgroundColor: latestScene.backgroundColor,
+          showGrid: latestScene.showGrid,
+          gridSize: latestScene.gridSize,
+          gridDivisions: latestScene.gridDivisions,
+          hideAllMenus: false // Always start with menus visible
+        };
+        cameraPerspective = latestScene.cameraPerspective as CameraPerspective;
+        cameraZoom = latestScene.cameraZoom;
+      }
+
+      // Update the store with loaded data
+      set({
+        objects,
+        groups,
+        lights,
+        sceneSettings,
+        cameraPerspective,
+        cameraZoom,
+        isLoading: false,
+        lastSaved: new Date(),
+        hasUnsavedChanges: false
+      });
+
+      console.log(`Loaded ${objects.length} objects, ${groups.length} groups, ${lights.length} lights for project ${projectId}`);
+      
+    } catch (error) {
+      console.error('Error loading project data:', error);
+      set({ isLoading: false });
+      throw error;
+    }
+  },
+
+  saveProjectData: async () => {
+    const state = get();
     
-    console.log(`Loading project data for project: ${projectId}, user: ${userId}`);
+    if (!state.currentProjectId || !state.currentUserId) {
+      console.warn('Cannot save: No project or user selected');
+      return;
+    }
+
+    try {
+      console.log(`Saving project data for project: ${state.currentProjectId}`);
+      
+      // Save all objects
+      const objectPromises = state.objects.map(async (obj) => {
+        const firestoreData = objectToFirestore(obj.object, obj.name, obj.id, state.currentUserId!, state.currentProjectId!);
+        firestoreData.visible = obj.visible;
+        firestoreData.locked = obj.locked;
+        if (obj.groupId !== undefined) {
+          firestoreData.groupId = obj.groupId;
+        }
+        
+        // Try to update first, if it fails, create new
+        try {
+          await updateObject(obj.id, firestoreData, state.currentUserId!, state.currentProjectId!);
+        } catch (error) {
+          // If update fails, create new object
+          await saveObject(firestoreData, state.currentUserId!, state.currentProjectId!);
+        }
+      });
+
+      // Save all groups
+      const groupPromises = state.groups.map(async (group) => {
+        const firestoreGroup: FirestoreGroup = {
+          id: group.id,
+          name: group.name,
+          expanded: group.expanded,
+          visible: group.visible,
+          locked: group.locked,
+          objectIds: group.objectIds
+        };
+        
+        try {
+          await updateGroup(group.id, firestoreGroup, state.currentUserId!, state.currentProjectId!);
+        } catch (error) {
+          await saveGroup(firestoreGroup, state.currentUserId!, state.currentProjectId!);
+        }
+      });
+
+      // Save all lights
+      const lightPromises = state.lights.map(async (light) => {
+        const firestoreLight: FirestoreLight = {
+          id: light.id,
+          name: light.name,
+          type: light.type,
+          position: light.position,
+          target: light.target,
+          intensity: light.intensity,
+          color: light.color,
+          visible: light.visible,
+          castShadow: light.castShadow,
+          distance: light.distance,
+          decay: light.decay,
+          angle: light.angle,
+          penumbra: light.penumbra
+        };
+        
+        try {
+          await updateLight(light.id, firestoreLight, state.currentUserId!, state.currentProjectId!);
+        } catch (error) {
+          await saveLight(firestoreLight, state.currentUserId!, state.currentProjectId!);
+        }
+      });
+
+      // Save scene settings
+      const sceneData: FirestoreScene = {
+        name: `Scene ${new Date().toLocaleString()}`,
+        description: 'Auto-saved scene',
+        backgroundColor: state.sceneSettings.backgroundColor,
+        showGrid: state.sceneSettings.showGrid,
+        gridSize: state.sceneSettings.gridSize,
+        gridDivisions: state.sceneSettings.gridDivisions,
+        cameraPerspective: state.cameraPerspective,
+        cameraZoom: state.cameraZoom
+      };
+      const scenePromise = saveScene(sceneData, state.currentUserId!, state.currentProjectId!);
+
+      // Wait for all saves to complete
+      await Promise.all([
+        ...objectPromises,
+        ...groupPromises,
+        ...lightPromises,
+        scenePromise
+      ]);
+
+      // Mark as saved
+      set({
+        lastSaved: new Date(),
+        hasUnsavedChanges: false
+      });
+
+      console.log(`Saved ${state.objects.length} objects, ${state.groups.length} groups, ${state.lights.length} lights for project ${state.currentProjectId}`);
+      
+    } catch (error) {
+      console.error('Error saving project data:', error);
+      throw error;
+    }
   },
 
   updateSceneSettings: (settings) =>

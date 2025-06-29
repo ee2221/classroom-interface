@@ -1,16 +1,6 @@
 import React, { useState } from 'react';
 import { Save, Cloud, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { useSceneStore } from '../store/sceneStore';
-import { 
-  saveObject, 
-  saveGroup, 
-  saveLight, 
-  saveScene,
-  objectToFirestore,
-  FirestoreGroup,
-  FirestoreLight,
-  FirestoreScene
-} from '../services/firestoreService';
 
 interface SaveButtonProps {
   user: any;
@@ -22,9 +12,10 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user, projectId }) => {
     objects, 
     groups, 
     lights, 
-    sceneSettings, 
-    cameraPerspective, 
-    cameraZoom 
+    hasUnsavedChanges,
+    lastSaved,
+    saveProjectData,
+    markSaved
   } = useSceneStore();
   
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
@@ -55,70 +46,8 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user, projectId }) => {
     setSaveMessage('Saving to cloud...');
 
     try {
-      // Save all objects
-      const objectPromises = objects.map(async (obj) => {
-        const firestoreData = objectToFirestore(obj.object, obj.name, undefined, user.uid);
-        firestoreData.visible = obj.visible;
-        firestoreData.locked = obj.locked;
-        // Only add groupId if it's defined
-        if (obj.groupId !== undefined) {
-          firestoreData.groupId = obj.groupId;
-        }
-        return await saveObject(firestoreData, user.uid, projectId);
-      });
-
-      // Save all groups
-      const groupPromises = groups.map(async (group) => {
-        const firestoreGroup: FirestoreGroup = {
-          name: group.name,
-          expanded: group.expanded,
-          visible: group.visible,
-          locked: group.locked,
-          objectIds: group.objectIds
-        };
-        return await saveGroup(firestoreGroup, user.uid, projectId);
-      });
-
-      // Save all lights
-      const lightPromises = lights.map(async (light) => {
-        const firestoreLight: FirestoreLight = {
-          name: light.name,
-          type: light.type,
-          position: light.position,
-          target: light.target,
-          intensity: light.intensity,
-          color: light.color,
-          visible: light.visible,
-          castShadow: light.castShadow,
-          distance: light.distance,
-          decay: light.decay,
-          angle: light.angle,
-          penumbra: light.penumbra
-        };
-        return await saveLight(firestoreLight, user.uid, projectId);
-      });
-
-      // Save scene settings
-      const sceneData: FirestoreScene = {
-        name: `Scene ${new Date().toLocaleString()}`,
-        description: 'Auto-saved scene',
-        backgroundColor: sceneSettings.backgroundColor,
-        showGrid: sceneSettings.showGrid,
-        gridSize: sceneSettings.gridSize,
-        gridDivisions: sceneSettings.gridDivisions,
-        cameraPerspective,
-        cameraZoom
-      };
-      const scenePromise = saveScene(sceneData, user.uid, projectId);
-
-      // Wait for all saves to complete
-      await Promise.all([
-        ...objectPromises,
-        ...groupPromises,
-        ...lightPromises,
-        scenePromise
-      ]);
-
+      await saveProjectData();
+      
       setSaveStatus('success');
       setSaveMessage(`Saved ${objects.length} objects, ${groups.length} groups, ${lights.length} lights`);
       
@@ -169,7 +98,9 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user, projectId }) => {
           <>
             <Cloud className="w-5 h-5" />
             <Save className="w-4 h-4" />
-            <span className="text-sm font-medium">Save to Cloud</span>
+            <span className="text-sm font-medium">
+              {hasUnsavedChanges ? 'Save Changes' : 'Save to Cloud'}
+            </span>
           </>
         );
     }
@@ -186,6 +117,9 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user, projectId }) => {
       case 'error':
         return `${baseStyles} bg-red-500/20 border-red-500/30 text-red-400 hover:bg-red-500/30 hover:scale-105 active:scale-95`;
       default:
+        if (hasUnsavedChanges) {
+          return `${baseStyles} bg-orange-500/20 border-orange-500/30 text-orange-400 hover:bg-orange-500/30 hover:scale-105 active:scale-95`;
+        }
         return `${baseStyles} bg-[#1a1a1a] border-white/5 text-white/90 hover:bg-[#2a2a2a] hover:scale-105 active:scale-95`;
     }
   };
@@ -209,7 +143,9 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user, projectId }) => {
                   ? 'No content to save' 
                   : saveStatus === 'saving' 
                     ? 'Saving to Firebase...' 
-                    : 'Save current scene to Firebase'
+                    : hasUnsavedChanges
+                      ? 'Save unsaved changes to Firebase'
+                      : 'Save current scene to Firebase'
           }
         >
           {getButtonContent()}
@@ -242,6 +178,16 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user, projectId }) => {
                 <span>{lights.length} light{lights.length !== 1 ? 's' : ''}</span>
               )}
             </div>
+            {lastSaved && (
+              <div className="text-xs text-white/50 mt-1">
+                Last saved: {lastSaved.toLocaleTimeString()}
+              </div>
+            )}
+            {hasUnsavedChanges && (
+              <div className="text-xs text-orange-400 mt-1">
+                • Unsaved changes
+              </div>
+            )}
           </div>
         )}
       </div>

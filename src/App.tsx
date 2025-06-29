@@ -18,7 +18,7 @@ import { useSceneStore } from './store/sceneStore';
 import { useClassroomStore } from './store/classroomStore';
 
 function App() {
-  const { sceneSettings, setCurrentProject } = useSceneStore();
+  const { sceneSettings, setCurrentProject, isLoading } = useSceneStore();
   const { currentProject, setCurrentProject: setClassroomCurrentProject } = useClassroomStore();
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -63,19 +63,28 @@ function App() {
   const handleProjectSelect = (projectId: string) => {
     // Set the current project in both stores
     const selectedProject = useClassroomStore.getState().projects.find(p => p.id === projectId);
-    if (selectedProject) {
+    if (selectedProject && user) {
       setClassroomCurrentProject(selectedProject);
-      // Set the project context in scene store - this will clear all data and prepare for new project
-      setCurrentProject(projectId);
+      // Set the project context in scene store - this will clear all data and load project data
+      setCurrentProject(projectId, user.uid);
       setCurrentView('studio');
       
-      // In a full implementation, this would also load the project data from Firestore
-      // For now, we start with a clean slate for each project
       console.log(`Switched to project: ${selectedProject.name} (${projectId})`);
     }
   };
 
-  const handleBackToClassroom = () => {
+  const handleBackToClassroom = async () => {
+    // Save current project data before going back to classroom
+    const sceneStore = useSceneStore.getState();
+    if (sceneStore.currentProjectId && sceneStore.hasUnsavedChanges) {
+      try {
+        await sceneStore.saveProjectData();
+        console.log('Project data saved before returning to classroom');
+      } catch (error) {
+        console.error('Failed to save project data:', error);
+      }
+    }
+    
     setCurrentView('classroom');
     // Optionally clear current project or keep it for context
     // setCurrentProject(null);
@@ -181,6 +190,17 @@ function App() {
   // Show 3D Studio when a project is selected
   return (
     <div className="w-full h-screen relative">
+      {/* Loading overlay for project data */}
+      {isLoading && (
+        <div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="text-center">
+            <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
+            <p className="text-white/90 font-medium">Loading project data...</p>
+            <p className="text-white/60 text-sm mt-1">Restoring your 3D scene</p>
+          </div>
+        </div>
+      )}
+
       <Scene />
       
       {/* Top Left Controls - Arranged horizontally */}
