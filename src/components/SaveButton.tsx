@@ -14,9 +14,10 @@ import {
 
 interface SaveButtonProps {
   user: any;
+  projectId?: string;
 }
 
-const SaveButton: React.FC<SaveButtonProps> = ({ user }) => {
+const SaveButton: React.FC<SaveButtonProps> = ({ user, projectId }) => {
   const { 
     objects, 
     groups, 
@@ -40,6 +41,16 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user }) => {
       return;
     }
 
+    if (!projectId) {
+      setSaveStatus('error');
+      setSaveMessage('No project selected');
+      setTimeout(() => {
+        setSaveStatus('idle');
+        setSaveMessage('');
+      }, 3000);
+      return;
+    }
+
     setSaveStatus('saving');
     setSaveMessage('Saving to cloud...');
 
@@ -53,7 +64,7 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user }) => {
         if (obj.groupId !== undefined) {
           firestoreData.groupId = obj.groupId;
         }
-        return await saveObject(firestoreData, user.uid);
+        return await saveObject(firestoreData, user.uid, projectId);
       });
 
       // Save all groups
@@ -65,7 +76,7 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user }) => {
           locked: group.locked,
           objectIds: group.objectIds
         };
-        return await saveGroup(firestoreGroup, user.uid);
+        return await saveGroup(firestoreGroup, user.uid, projectId);
       });
 
       // Save all lights
@@ -84,7 +95,7 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user }) => {
           angle: light.angle,
           penumbra: light.penumbra
         };
-        return await saveLight(firestoreLight, user.uid);
+        return await saveLight(firestoreLight, user.uid, projectId);
       });
 
       // Save scene settings
@@ -98,7 +109,7 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user }) => {
         cameraPerspective,
         cameraZoom
       };
-      const scenePromise = saveScene(sceneData, user.uid);
+      const scenePromise = saveScene(sceneData, user.uid, projectId);
 
       // Wait for all saves to complete
       await Promise.all([
@@ -179,7 +190,7 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user }) => {
     }
   };
 
-  const isDisabled = saveStatus === 'saving' || !user;
+  const isDisabled = saveStatus === 'saving' || !user || !projectId;
   const hasContent = objects.length > 0 || groups.length > 0 || lights.length > 0;
 
   return (
@@ -192,11 +203,13 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user }) => {
           title={
             !user
               ? 'Sign in to save'
-              : !hasContent 
-                ? 'No content to save' 
-                : saveStatus === 'saving' 
-                  ? 'Saving to Firebase...' 
-                  : 'Save current scene to Firebase'
+              : !projectId
+                ? 'Select a project to save'
+                : !hasContent 
+                  ? 'No content to save' 
+                  : saveStatus === 'saving' 
+                    ? 'Saving to Firebase...' 
+                    : 'Save current scene to Firebase'
           }
         >
           {getButtonContent()}
@@ -216,7 +229,7 @@ const SaveButton: React.FC<SaveButtonProps> = ({ user }) => {
         )}
         
         {/* Scene Info */}
-        {hasContent && saveStatus === 'idle' && user && (
+        {hasContent && saveStatus === 'idle' && user && projectId && (
           <div className="bg-[#1a1a1a]/90 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/60">
             <div className="flex items-center gap-4">
               {objects.length > 0 && (

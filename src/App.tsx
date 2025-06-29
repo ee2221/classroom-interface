@@ -199,7 +199,7 @@ function App() {
         </button>
         
         {/* Save Button - When user is authenticated */}
-        {user && <SaveButton user={user} />}
+        {user && <SaveButton user={user} projectId={currentProject?.id} />}
         
         {/* User Profile - When user is authenticated */}
         {user && <UserProfile user={user} onSignOut={handleSignOut} />}
