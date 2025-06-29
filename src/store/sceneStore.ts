@@ -10,22 +10,17 @@ import {
   saveLight,
   updateLight,
   deleteLight,
-  saveScene,
-  updateScene,
   getObjects,
   getGroups,
   getLights,
-  getScenes,
-  objectToFirestore,
-  firestoreToObject,
   subscribeToObjects,
   subscribeToGroups,
   subscribeToLights,
-  clearProjectData as clearFirestoreProjectData,
-  type FirestoreObject,
-  type FirestoreGroup,
-  type FirestoreLight,
-  type FirestoreScene
+  objectToFirestore,
+  firestoreToObject,
+  FirestoreObject,
+  FirestoreGroup,
+  FirestoreLight
 } from '../services/firestoreService';
 
 type EditMode = 'vertex' | 'edge' | null;
@@ -46,6 +41,7 @@ interface Light {
   angle: number;
   penumbra: number;
   object?: THREE.Light;
+  firestoreId?: string; // Track Firestore document ID
 }
 
 interface Group {
@@ -55,6 +51,7 @@ interface Group {
   visible: boolean;
   locked: boolean;
   objectIds: string[];
+  firestoreId?: string; // Track Firestore document ID
 }
 
 interface SceneSettings {
@@ -73,17 +70,13 @@ interface HistoryState {
     visible: boolean;
     locked: boolean;
     groupId?: string;
+    firestoreId?: string;
   }>;
   groups: Group[];
   lights: Light[];
 }
 
 interface SceneState {
-  // Current project context
-  currentProjectId: string | null;
-  currentUserId: string | null;
-  isLoading: boolean;
-  
   objects: Array<{
     id: string;
     object: THREE.Object3D;
@@ -91,6 +84,7 @@ interface SceneState {
     visible: boolean;
     locked: boolean;
     groupId?: string;
+    firestoreId?: string; // Track Firestore document ID
   }>;
   groups: Group[];
   lights: Light[];
@@ -133,29 +127,36 @@ interface SceneState {
     name: string;
     color?: string;
   } | null;
-  // Save state
+  // Save state and project context
   lastSaved: Date | null;
   hasUnsavedChanges: boolean;
+  currentProjectId: string | null;
+  currentUserId: string | null;
+  isLoading: boolean;
+  // Real-time sync state
+  unsubscribeObjects?: () => void;
+  unsubscribeGroups?: () => void;
+  unsubscribeLights?: () => void;
   
   // Project management
-  setCurrentProject: (projectId: string | null, userId?: string | null) => void;
-  clearProjectData: () => void;
-  loadProjectData: (projectId: string, userId: string) => Promise<void>;
+  setCurrentProject: (projectId: string | null, userId: string | null) => Promise<void>;
+  loadProjectData: () => Promise<void>;
   saveProjectData: () => Promise<void>;
+  clearProjectData: () => void;
   
-  addObject: (object: THREE.Object3D, name: string) => void;
-  removeObject: (id: string) => void;
+  addObject: (object: THREE.Object3D, name: string) => Promise<void>;
+  removeObject: (id: string) => Promise<void>;
   setSelectedObject: (object: THREE.Object3D | null) => void;
   setTransformMode: (mode: 'translate' | 'rotate' | 'scale' | null) => void;
   setEditMode: (mode: EditMode) => void;
   setCameraPerspective: (perspective: CameraPerspective) => void;
   updateSceneSettings: (settings: Partial<SceneSettings>) => void;
-  toggleVisibility: (id: string) => void;
-  toggleLock: (id: string) => void;
-  updateObjectName: (id: string, name: string) => void;
-  updateObjectProperties: () => void;
-  updateObjectColor: (color: string) => void;
-  updateObjectOpacity: (opacity: number) => void;
+  toggleVisibility: (id: string) => Promise<void>;
+  toggleLock: (id: string) => Promise<void>;
+  updateObjectName: (id: string, name: string) => Promise<void>;
+  updateObjectProperties: () => Promise<void>;
+  updateObjectColor: (color: string) => Promise<void>;
+  updateObjectOpacity: (opacity: number) => Promise<void>;
   setSelectedElements: (type: 'vertices' | 'edges' | 'faces', indices: number[]) => void;
   startVertexDrag: (index: number, position: THREE.Vector3) => void;
   updateVertexDrag: (position: THREE.Vector3) => void;
@@ -167,31 +168,31 @@ interface SceneState {
   updateCylinderVertices: (vertexCount: number) => void;
   updateSphereVertices: (vertexCount: number) => void;
   // Group management
-  createGroup: (name: string, objectIds?: string[]) => void;
-  removeGroup: (groupId: string) => void;
-  addObjectToGroup: (objectId: string, groupId: string) => void;
-  removeObjectFromGroup: (objectId: string) => void;
+  createGroup: (name: string, objectIds?: string[]) => Promise<void>;
+  removeGroup: (groupId: string) => Promise<void>;
+  addObjectToGroup: (objectId: string, groupId: string) => Promise<void>;
+  removeObjectFromGroup: (objectId: string) => Promise<void>;
   toggleGroupExpanded: (groupId: string) => void;
-  toggleGroupVisibility: (groupId: string) => void;
-  toggleGroupLock: (groupId: string) => void;
-  updateGroupName: (groupId: string, name: string) => void;
-  moveObjectsToGroup: (objectIds: string[], groupId: string | null) => void;
+  toggleGroupVisibility: (groupId: string) => Promise<void>;
+  toggleGroupLock: (groupId: string) => Promise<void>;
+  updateGroupName: (groupId: string, name: string) => Promise<void>;
+  moveObjectsToGroup: (objectIds: string[], groupId: string | null) => Promise<void>;
   // New action functions
   undo: () => void;
   redo: () => void;
-  duplicateObject: () => void;
-  mirrorObject: () => void;
+  duplicateObject: () => Promise<void>;
+  mirrorObject: () => Promise<void>;
   zoomIn: () => void;
   zoomOut: () => void;
   // Enhanced placement functions
   startObjectPlacement: (objectDef: { geometry: () => THREE.BufferGeometry | THREE.Group; name: string; color?: string }) => void;
-  placeObjectAt: (position: THREE.Vector3, rotation?: THREE.Euler | null) => void;
+  placeObjectAt: (position: THREE.Vector3, rotation?: THREE.Euler | null) => Promise<void>;
   cancelObjectPlacement: () => void;
   // Light management functions
-  addLight: (type: 'directional' | 'point' | 'spot', position?: number[]) => void;
-  removeLight: (lightId: string) => void;
-  updateLight: (lightId: string, properties: Partial<Light>) => void;
-  toggleLightVisibility: (lightId: string) => void;
+  addLight: (type: 'directional' | 'point' | 'spot', position?: number[]) => Promise<void>;
+  removeLight: (lightId: string) => Promise<void>;
+  updateLight: (lightId: string, properties: Partial<Light>) => Promise<void>;
+  toggleLightVisibility: (lightId: string) => Promise<void>;
   setSelectedLight: (light: Light | null) => void;
   // Helper functions
   isObjectLocked: (objectId: string) => boolean;
@@ -246,20 +247,7 @@ const createLight = (type: 'directional' | 'point' | 'spot', position: number[],
   return light;
 };
 
-// Helper function to check if an ID is a temporary UUID
-const isTemporaryUUID = (id: string): boolean => {
-  // UUIDs generated by crypto.randomUUID() have the format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
-  // where x is any hexadecimal digit and y is one of 8, 9, A, or B
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  return uuidRegex.test(id);
-};
-
 export const useSceneStore = create<SceneState>((set, get) => ({
-  // Current project context
-  currentProjectId: null,
-  currentUserId: null,
-  isLoading: false,
-  
   objects: [],
   groups: [],
   lights: [],
@@ -294,134 +282,139 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   // New placement state
   placementMode: false,
   pendingObject: null,
-  // Save state
+  // Save state and project context
   lastSaved: null,
   hasUnsavedChanges: false,
+  currentProjectId: null,
+  currentUserId: null,
+  isLoading: false,
 
   // Project management functions
-  setCurrentProject: async (projectId, userId = null) => {
-    const currentProjectId = get().currentProjectId;
+  setCurrentProject: async (projectId, userId) => {
+    const state = get();
     
-    // Only clear and reset if switching to a different project
-    if (currentProjectId !== projectId) {
-      // Save current project data before switching (if we have a project)
-      if (currentProjectId && get().currentUserId && get().hasUnsavedChanges) {
-        try {
-          await get().saveProjectData();
-        } catch (error) {
-          console.error('Failed to save current project before switching:', error);
-        }
-      }
+    // Clean up existing subscriptions
+    if (state.unsubscribeObjects) state.unsubscribeObjects();
+    if (state.unsubscribeGroups) state.unsubscribeGroups();
+    if (state.unsubscribeLights) state.unsubscribeLights();
+    
+    // Clear current data
+    set({
+      objects: [],
+      groups: [],
+      lights: [],
+      selectedObject: null,
+      selectedLight: null,
+      currentProjectId: projectId,
+      currentUserId: userId,
+      isLoading: !!projectId,
+      unsubscribeObjects: undefined,
+      unsubscribeGroups: undefined,
+      unsubscribeLights: undefined
+    });
 
-      set({
-        currentProjectId: projectId,
-        currentUserId: userId,
-        isLoading: !!projectId, // Set loading if we're switching to a project
-        // Clear all project-specific data when switching projects
-        objects: [],
-        groups: [],
-        lights: [],
-        selectedLight: null,
-        selectedObject: null,
-        transformMode: null,
-        editMode: null,
-        selectedElements: {
-          vertices: [],
-          edges: [],
-          faces: [],
-        },
-        draggedVertex: null,
-        draggedEdge: null,
-        isDraggingEdge: false,
-        history: [],
-        historyIndex: -1,
-        canUndo: false,
-        canRedo: false,
-        placementMode: false,
-        pendingObject: null,
-        lastSaved: null,
-        hasUnsavedChanges: false,
-        // Reset camera and scene settings to defaults for new project
-        cameraPerspective: 'perspective',
-        cameraZoom: 1,
-        sceneSettings: {
-          backgroundColor: '#0f0f23',
-          showGrid: true,
-          gridSize: 10,
-          gridDivisions: 10,
-          hideAllMenus: false
-        }
-      });
+    if (projectId && userId) {
+      try {
+        console.log(`Loading project data for project: ${projectId}`);
+        
+        // Set up real-time subscriptions
+        const unsubObjects = subscribeToObjects(userId, projectId, (firestoreObjects) => {
+          console.log(`Received ${firestoreObjects.length} objects from Firestore`);
+          
+          const threeObjects = firestoreObjects.map(firestoreObj => {
+            const threeObject = firestoreToObject(firestoreObj);
+            if (threeObject && firestoreObj.id) {
+              return {
+                id: crypto.randomUUID(), // Local ID for scene management
+                object: threeObject,
+                name: firestoreObj.name,
+                visible: firestoreObj.visible,
+                locked: firestoreObj.locked,
+                groupId: firestoreObj.groupId,
+                firestoreId: firestoreObj.id // Track Firestore document ID
+              };
+            }
+            return null;
+          }).filter(Boolean) as Array<{
+            id: string;
+            object: THREE.Object3D;
+            name: string;
+            visible: boolean;
+            locked: boolean;
+            groupId?: string;
+            firestoreId?: string;
+          }>;
 
-      // Load the new project data if we have both projectId and userId
-      if (projectId && userId) {
-        try {
-          await get().loadProjectData(projectId, userId);
-        } catch (error) {
-          console.error('Failed to load project data:', error);
-          set({ isLoading: false });
-        }
-      } else {
+          set(state => ({ 
+            ...state, 
+            objects: threeObjects,
+            isLoading: false 
+          }));
+        });
+
+        const unsubGroups = subscribeToGroups(userId, projectId, (firestoreGroups) => {
+          console.log(`Received ${firestoreGroups.length} groups from Firestore`);
+          
+          const groups = firestoreGroups.map(group => ({
+            ...group,
+            id: group.id || crypto.randomUUID(),
+            firestoreId: group.id
+          }));
+
+          set(state => ({ ...state, groups }));
+        });
+
+        const unsubLights = subscribeToLights(userId, projectId, (firestoreLights) => {
+          console.log(`Received ${firestoreLights.length} lights from Firestore`);
+          
+          const lights = firestoreLights.map(light => ({
+            ...light,
+            id: light.id || crypto.randomUUID(),
+            object: createLight(light.type, light.position, light.target),
+            firestoreId: light.id
+          }));
+
+          set(state => ({ ...state, lights }));
+        });
+
+        set({
+          unsubscribeObjects: unsubObjects,
+          unsubscribeGroups: unsubGroups,
+          unsubscribeLights: unsubLights
+        });
+
+      } catch (error) {
+        console.error('Failed to load project data:', error);
         set({ isLoading: false });
       }
     }
   },
 
-  clearProjectData: () => {
-    set({
-      currentProjectId: null,
-      currentUserId: null,
-      objects: [],
-      groups: [],
-      lights: [],
-      selectedLight: null,
-      selectedObject: null,
-      transformMode: null,
-      editMode: null,
-      selectedElements: {
-        vertices: [],
-        edges: [],
-        faces: [],
-      },
-      draggedVertex: null,
-      draggedEdge: null,
-      isDraggingEdge: false,
-      history: [],
-      historyIndex: -1,
-      canUndo: false,
-      canRedo: false,
-      placementMode: false,
-      pendingObject: null,
-      lastSaved: null,
-      hasUnsavedChanges: false
-    });
-  },
+  loadProjectData: async () => {
+    const { currentProjectId, currentUserId } = get();
+    if (!currentProjectId || !currentUserId) return;
 
-  loadProjectData: async (projectId, userId) => {
     set({ isLoading: true });
     
     try {
-      console.log(`Loading project data for project: ${projectId}, user: ${userId}`);
-      
-      // Load all project data from Firestore
-      const [firestoreObjects, firestoreGroups, firestoreLights, firestoreScenes] = await Promise.all([
-        getObjects(userId, projectId),
-        getGroups(userId, projectId),
-        getLights(userId, projectId),
-        getScenes(userId, projectId)
+      const [firestoreObjects, firestoreGroups, firestoreLights] = await Promise.all([
+        getObjects(currentUserId, currentProjectId),
+        getGroups(currentUserId, currentProjectId),
+        getLights(currentUserId, currentProjectId)
       ]);
 
-      // Convert Firestore objects back to THREE.js objects
-      const objects = firestoreObjects.map(firestoreObj => {
+      // Convert Firestore objects to THREE.js objects
+      const threeObjects = firestoreObjects.map(firestoreObj => {
         const threeObject = firestoreToObject(firestoreObj);
         if (threeObject && firestoreObj.id) {
           return {
-            id: firestoreObj.id,
+            id: crypto.randomUUID(),
             object: threeObject,
             name: firestoreObj.name,
             visible: firestoreObj.visible,
             locked: firestoreObj.locked,
-            groupId: firestoreObj.groupId
+            groupId: firestoreObj.groupId,
+            firestoreId: firestoreObj.id
           };
         }
         return null;
@@ -432,150 +425,93 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         visible: boolean;
         locked: boolean;
         groupId?: string;
+        firestoreId?: string;
       }>;
 
       // Convert Firestore groups
-      const groups: Group[] = firestoreGroups.map(firestoreGroup => ({
-        id: firestoreGroup.id!,
-        name: firestoreGroup.name,
-        expanded: firestoreGroup.expanded,
-        visible: firestoreGroup.visible,
-        locked: firestoreGroup.locked,
-        objectIds: firestoreGroup.objectIds
+      const groups = firestoreGroups.map(group => ({
+        ...group,
+        id: group.id || crypto.randomUUID(),
+        firestoreId: group.id
       }));
 
-      // Convert Firestore lights and create THREE.js light objects
-      const lights: Light[] = firestoreLights.map(firestoreLight => ({
-        id: firestoreLight.id!,
-        name: firestoreLight.name,
-        type: firestoreLight.type,
-        position: firestoreLight.position,
-        target: firestoreLight.target,
-        intensity: firestoreLight.intensity,
-        color: firestoreLight.color,
-        visible: firestoreLight.visible,
-        castShadow: firestoreLight.castShadow,
-        distance: firestoreLight.distance,
-        decay: firestoreLight.decay,
-        angle: firestoreLight.angle,
-        penumbra: firestoreLight.penumbra,
-        object: createLight(firestoreLight.type, firestoreLight.position, firestoreLight.target)
+      // Convert Firestore lights
+      const lights = firestoreLights.map(light => ({
+        ...light,
+        id: light.id || crypto.randomUUID(),
+        object: createLight(light.type, light.position, light.target),
+        firestoreId: light.id
       }));
 
-      // Load scene settings if available
-      let sceneSettings = get().sceneSettings;
-      let cameraPerspective: CameraPerspective = 'perspective';
-      let cameraZoom = 1;
-
-      if (firestoreScenes.length > 0) {
-        const latestScene = firestoreScenes[0]; // Get the most recent scene
-        sceneSettings = {
-          backgroundColor: latestScene.backgroundColor,
-          showGrid: latestScene.showGrid,
-          gridSize: latestScene.gridSize,
-          gridDivisions: latestScene.gridDivisions,
-          hideAllMenus: false // Always start with menus visible
-        };
-        cameraPerspective = latestScene.cameraPerspective as CameraPerspective;
-        cameraZoom = latestScene.cameraZoom;
-      }
-
-      // Update the store with loaded data
       set({
-        objects,
+        objects: threeObjects,
         groups,
         lights,
-        sceneSettings,
-        cameraPerspective,
-        cameraZoom,
         isLoading: false,
         lastSaved: new Date(),
         hasUnsavedChanges: false
       });
 
-      console.log(`Loaded ${objects.length} objects, ${groups.length} groups, ${lights.length} lights for project ${projectId}`);
-      
+      console.log(`Loaded project data: ${threeObjects.length} objects, ${groups.length} groups, ${lights.length} lights`);
     } catch (error) {
       console.error('Error loading project data:', error);
       set({ isLoading: false });
-      throw error;
     }
   },
 
   saveProjectData: async () => {
-    const state = get();
+    const { objects, groups, lights, currentProjectId, currentUserId } = get();
     
-    if (!state.currentProjectId || !state.currentUserId) {
-      console.warn('Cannot save: No project or user selected');
-      return;
+    if (!currentProjectId || !currentUserId) {
+      throw new Error('No project or user context for saving');
     }
 
     try {
-      console.log(`Saving project data for project: ${state.currentProjectId}`);
-      
-      // Keep track of objects that need their IDs updated
-      const objectsToUpdate: Array<{ oldId: string; newId: string }> = [];
-      
       // Save all objects
-      const objectPromises = state.objects.map(async (obj) => {
-        const firestoreData = objectToFirestore(obj.object, obj.name, obj.id, state.currentUserId!, state.currentProjectId!);
+      const objectPromises = objects.map(async (obj) => {
+        const firestoreData = objectToFirestore(obj.object, obj.name, obj.firestoreId, currentUserId, currentProjectId);
         firestoreData.visible = obj.visible;
         firestoreData.locked = obj.locked;
         if (obj.groupId !== undefined) {
           firestoreData.groupId = obj.groupId;
         }
-        
-        // Check if this is a temporary UUID (new object) or existing Firestore ID
-        if (isTemporaryUUID(obj.id)) {
-          // This is a new object, create it in Firestore
-          const newId = await saveObject(firestoreData, state.currentUserId!, state.currentProjectId!);
-          objectsToUpdate.push({ oldId: obj.id, newId });
+
+        if (obj.firestoreId) {
+          // Update existing object
+          await updateObject(obj.firestoreId, firestoreData, currentUserId, currentProjectId);
+          return obj.firestoreId;
         } else {
-          // This is an existing object, update it
-          try {
-            await updateObject(obj.id, firestoreData, state.currentUserId!, state.currentProjectId!);
-          } catch (error) {
-            // If update fails (document doesn't exist), create new object
-            console.warn(`Update failed for object ${obj.id}, creating new document:`, error);
-            const newId = await saveObject(firestoreData, state.currentUserId!, state.currentProjectId!);
-            objectsToUpdate.push({ oldId: obj.id, newId });
-          }
+          // Create new object
+          const newId = await saveObject(firestoreData, currentUserId, currentProjectId);
+          // Update local object with Firestore ID
+          obj.firestoreId = newId;
+          return newId;
         }
       });
 
-      // Save all groups (similar logic for groups)
-      const groupsToUpdate: Array<{ oldId: string; newId: string }> = [];
-      const groupPromises = state.groups.map(async (group) => {
+      // Save all groups
+      const groupPromises = groups.map(async (group) => {
         const firestoreGroup: FirestoreGroup = {
-          id: group.id,
           name: group.name,
           expanded: group.expanded,
           visible: group.visible,
           locked: group.locked,
           objectIds: group.objectIds
         };
-        
-        if (isTemporaryUUID(group.id)) {
-          // This is a new group, create it in Firestore
-          const newId = await saveGroup(firestoreGroup, state.currentUserId!, state.currentProjectId!);
-          groupsToUpdate.push({ oldId: group.id, newId });
+
+        if (group.firestoreId) {
+          await updateGroup(group.firestoreId, firestoreGroup, currentUserId, currentProjectId);
+          return group.firestoreId;
         } else {
-          // This is an existing group, update it
-          try {
-            await updateGroup(group.id, firestoreGroup, state.currentUserId!, state.currentProjectId!);
-          } catch (error) {
-            console.warn(`Update failed for group ${group.id}, creating new document:`, error);
-            const newId = await saveGroup(firestoreGroup, state.currentUserId!, state.currentProjectId!);
-            groupsToUpdate.push({ oldId: group.id, newId });
-          }
+          const newId = await saveGroup(firestoreGroup, currentUserId, currentProjectId);
+          group.firestoreId = newId;
+          return newId;
         }
       });
 
-      // Save all lights (similar logic for lights)
-      const lightsToUpdate: Array<{ oldId: string; newId: string }> = [];
-      const lightPromises = state.lights.map(async (light) => {
+      // Save all lights
+      const lightPromises = lights.map(async (light) => {
         const firestoreLight: FirestoreLight = {
-          id: light.id,
           name: light.name,
           type: light.type,
           position: light.position,
@@ -589,103 +525,58 @@ export const useSceneStore = create<SceneState>((set, get) => ({
           angle: light.angle,
           penumbra: light.penumbra
         };
-        
-        if (isTemporaryUUID(light.id)) {
-          // This is a new light, create it in Firestore
-          const newId = await saveLight(firestoreLight, state.currentUserId!, state.currentProjectId!);
-          lightsToUpdate.push({ oldId: light.id, newId });
+
+        if (light.firestoreId) {
+          await updateLight(light.firestoreId, firestoreLight, currentUserId, currentProjectId);
+          return light.firestoreId;
         } else {
-          // This is an existing light, update it
-          try {
-            await updateLight(light.id, firestoreLight, state.currentUserId!, state.currentProjectId!);
-          } catch (error) {
-            console.warn(`Update failed for light ${light.id}, creating new document:`, error);
-            const newId = await saveLight(firestoreLight, state.currentUserId!, state.currentProjectId!);
-            lightsToUpdate.push({ oldId: light.id, newId });
-          }
+          const newId = await saveLight(firestoreLight, currentUserId, currentProjectId);
+          light.firestoreId = newId;
+          return newId;
         }
       });
-
-      // Save scene settings
-      const sceneData: FirestoreScene = {
-        name: `Scene ${new Date().toLocaleString()}`,
-        description: 'Auto-saved scene',
-        backgroundColor: state.sceneSettings.backgroundColor,
-        showGrid: state.sceneSettings.showGrid,
-        gridSize: state.sceneSettings.gridSize,
-        gridDivisions: state.sceneSettings.gridDivisions,
-        cameraPerspective: state.cameraPerspective,
-        cameraZoom: state.cameraZoom
-      };
-      const scenePromise = saveScene(sceneData, state.currentUserId!, state.currentProjectId!);
 
       // Wait for all saves to complete
       await Promise.all([
         ...objectPromises,
         ...groupPromises,
-        ...lightPromises,
-        scenePromise
+        ...lightPromises
       ]);
 
-      // Update local state with new Firestore IDs if any objects/groups/lights were created
-      if (objectsToUpdate.length > 0 || groupsToUpdate.length > 0 || lightsToUpdate.length > 0) {
-        set((currentState) => {
-          // Update object IDs
-          const updatedObjects = currentState.objects.map(obj => {
-            const update = objectsToUpdate.find(u => u.oldId === obj.id);
-            return update ? { ...obj, id: update.newId } : obj;
-          });
-
-          // Update group IDs and their object references
-          const updatedGroups = currentState.groups.map(group => {
-            const groupUpdate = groupsToUpdate.find(u => u.oldId === group.id);
-            const updatedObjectIds = group.objectIds.map(objId => {
-              const objUpdate = objectsToUpdate.find(u => u.oldId === objId);
-              return objUpdate ? objUpdate.newId : objId;
-            });
-            
-            return {
-              ...group,
-              id: groupUpdate ? groupUpdate.newId : group.id,
-              objectIds: updatedObjectIds
-            };
-          });
-
-          // Update object group references
-          const finalObjects = updatedObjects.map(obj => {
-            if (obj.groupId) {
-              const groupUpdate = groupsToUpdate.find(u => u.oldId === obj.groupId);
-              return groupUpdate ? { ...obj, groupId: groupUpdate.newId } : obj;
-            }
-            return obj;
-          });
-
-          // Update light IDs
-          const updatedLights = currentState.lights.map(light => {
-            const update = lightsToUpdate.find(u => u.oldId === light.id);
-            return update ? { ...light, id: update.newId } : light;
-          });
-
-          return {
-            objects: finalObjects,
-            groups: updatedGroups,
-            lights: updatedLights
-          };
-        });
-      }
-
-      // Mark as saved
       set({
         lastSaved: new Date(),
         hasUnsavedChanges: false
       });
 
-      console.log(`Saved ${state.objects.length} objects, ${state.groups.length} groups, ${state.lights.length} lights for project ${state.currentProjectId}`);
-      
+      console.log(`Saved project data: ${objects.length} objects, ${groups.length} groups, ${lights.length} lights`);
     } catch (error) {
       console.error('Error saving project data:', error);
       throw error;
     }
+  },
+
+  clearProjectData: () => {
+    const state = get();
+    
+    // Clean up subscriptions
+    if (state.unsubscribeObjects) state.unsubscribeObjects();
+    if (state.unsubscribeGroups) state.unsubscribeGroups();
+    if (state.unsubscribeLights) state.unsubscribeLights();
+    
+    set({
+      objects: [],
+      groups: [],
+      lights: [],
+      selectedObject: null,
+      selectedLight: null,
+      currentProjectId: null,
+      currentUserId: null,
+      lastSaved: null,
+      hasUnsavedChanges: false,
+      unsubscribeObjects: undefined,
+      unsubscribeGroups: undefined,
+      unsubscribeLights: undefined
+    });
   },
 
   updateSceneSettings: (settings) =>
@@ -698,10 +589,6 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   saveToHistory: () => {
     const state = get();
-    
-    // Only save to history if we have a current project
-    if (!state.currentProjectId) return;
-    
     const currentState: HistoryState = {
       objects: state.objects.map(obj => ({
         ...obj,
@@ -732,59 +619,93 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     get().markUnsavedChanges();
   },
 
-  addObject: (object, name) =>
-    set((state) => {
-      // Only add objects if we have a current project
-      if (!state.currentProjectId) {
-        console.warn('Cannot add object: No project selected');
-        return state;
+  addObject: async (object, name) => {
+    const { currentProjectId, currentUserId } = get();
+    
+    const newObject = { 
+      id: crypto.randomUUID(), 
+      object, 
+      name, 
+      visible: true, 
+      locked: false 
+    };
+
+    // Add to local state immediately
+    set((state) => ({
+      objects: [...state.objects, newObject]
+    }));
+
+    // Save to database if we have project context
+    if (currentProjectId && currentUserId) {
+      try {
+        const firestoreData = objectToFirestore(object, name, undefined, currentUserId, currentProjectId);
+        firestoreData.visible = true;
+        firestoreData.locked = false;
+        
+        const firestoreId = await saveObject(firestoreData, currentUserId, currentProjectId);
+        
+        // Update local object with Firestore ID
+        set((state) => ({
+          objects: state.objects.map(obj => 
+            obj.id === newObject.id 
+              ? { ...obj, firestoreId }
+              : obj
+          )
+        }));
+        
+        console.log(`Object "${name}" saved to database with ID: ${firestoreId}`);
+      } catch (error) {
+        console.error('Failed to save object to database:', error);
+        // Object remains in local state even if database save fails
       }
-      
-      const newObjects = [...state.objects, { id: crypto.randomUUID(), object, name, visible: true, locked: false }];
-      
-      // Save to history after adding
-      setTimeout(() => get().saveToHistory(), 0);
-      
-      return { objects: newObjects };
-    }),
+    }
 
-  removeObject: (id) =>
-    set((state) => {
-      // Only remove objects if we have a current project
-      if (!state.currentProjectId) {
-        console.warn('Cannot remove object: No project selected');
-        return state;
+    // Save to history after adding
+    setTimeout(() => get().saveToHistory(), 0);
+  },
+
+  removeObject: async (id) => {
+    const state = get();
+    const objectToRemove = state.objects.find(obj => obj.id === id);
+    
+    if (!objectToRemove) return;
+
+    // Check if object is locked
+    if (objectToRemove.locked) return;
+
+    // Check if object is in a locked group
+    if (objectToRemove.groupId) {
+      const group = state.groups.find(g => g.id === objectToRemove.groupId);
+      if (group?.locked) return;
+    }
+
+    // Remove from database immediately if we have Firestore ID and project context
+    if (objectToRemove.firestoreId && state.currentProjectId) {
+      try {
+        await deleteObject(objectToRemove.firestoreId, state.currentProjectId);
+        console.log(`Object "${objectToRemove.name}" deleted from database`);
+      } catch (error) {
+        console.error('Failed to delete object from database:', error);
+        // Continue with local removal even if database deletion fails
       }
-      
-      // Check if object is locked
-      const objectToRemove = state.objects.find(obj => obj.id === id);
-      if (objectToRemove?.locked) return state;
+    }
 
-      // Check if object is in a locked group
-      if (objectToRemove?.groupId) {
-        const group = state.groups.find(g => g.id === objectToRemove.groupId);
-        if (group?.locked) return state;
-      }
+    // Remove object from any group
+    const updatedGroups = state.groups.map(group => ({
+      ...group,
+      objectIds: group.objectIds.filter(objId => objId !== id)
+    }));
 
-      // Remove object from any group
-      const updatedGroups = state.groups.map(group => ({
-        ...group,
-        objectIds: group.objectIds.filter(objId => objId !== id)
-      }));
+    // Remove from local state
+    set({
+      objects: state.objects.filter((obj) => obj.id !== id),
+      groups: updatedGroups,
+      selectedObject: objectToRemove.object === state.selectedObject ? null : state.selectedObject,
+    });
 
-      const newState = {
-        objects: state.objects.filter((obj) => obj.id !== id),
-        groups: updatedGroups,
-        selectedObject: state.objects.find((obj) => obj.id === id)?.object === state.selectedObject
-          ? null
-          : state.selectedObject,
-      };
-
-      // Save to history after removing
-      setTimeout(() => get().saveToHistory(), 0);
-
-      return newState;
-    }),
+    // Save to history after removing
+    setTimeout(() => get().saveToHistory(), 0);
+  },
 
   setSelectedObject: (object) => 
     set((state) => {
@@ -856,138 +777,231 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     set({ cameraPerspective: perspective });
   },
 
-  toggleVisibility: (id) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const objectToToggle = state.objects.find(obj => obj.id === id);
-      if (!objectToToggle) return state;
+  toggleVisibility: async (id) => {
+    const state = get();
+    const objectToToggle = state.objects.find(obj => obj.id === id);
+    if (!objectToToggle) return;
 
-      // Check if object is locked
-      if (objectToToggle.locked) return state;
+    // Check if object is locked
+    if (objectToToggle.locked) return;
 
-      // Check if object is in a locked group
-      if (objectToToggle.groupId) {
-        const group = state.groups.find(g => g.id === objectToToggle.groupId);
-        if (group?.locked) return state;
+    // Check if object is in a locked group
+    if (objectToToggle.groupId) {
+      const group = state.groups.find(g => g.id === objectToToggle.groupId);
+      if (group?.locked) return;
+    }
+
+    const newVisibility = !objectToToggle.visible;
+
+    // Update in database immediately if we have Firestore ID and project context
+    if (objectToToggle.firestoreId && state.currentProjectId && state.currentUserId) {
+      try {
+        await updateObject(
+          objectToToggle.firestoreId, 
+          { visible: newVisibility }, 
+          state.currentUserId, 
+          state.currentProjectId
+        );
+        console.log(`Object "${objectToToggle.name}" visibility updated in database`);
+      } catch (error) {
+        console.error('Failed to update object visibility in database:', error);
       }
+    }
 
-      const updatedObjects = state.objects.map((obj) =>
-        obj.id === id ? { ...obj, visible: !obj.visible } : obj
-      );
-      
-      const toggledObject = updatedObjects.find((obj) => obj.id === id);
-      
-      const newSelectedObject = (toggledObject && !toggledObject.visible && toggledObject.object === state.selectedObject)
-        ? null
-        : state.selectedObject;
+    // Update local state
+    const updatedObjects = state.objects.map((obj) =>
+      obj.id === id ? { ...obj, visible: newVisibility } : obj
+    );
+    
+    const toggledObject = updatedObjects.find((obj) => obj.id === id);
+    const newSelectedObject = (toggledObject && !toggledObject.visible && toggledObject.object === state.selectedObject)
+      ? null
+      : state.selectedObject;
 
-      get().markUnsavedChanges();
+    set({
+      objects: updatedObjects,
+      selectedObject: newSelectedObject,
+    });
 
-      return {
-        objects: updatedObjects,
-        selectedObject: newSelectedObject,
-      };
-    }),
+    get().markUnsavedChanges();
+  },
 
-  toggleLock: (id) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const objectToToggle = state.objects.find(obj => obj.id === id);
-      if (!objectToToggle) return state;
+  toggleLock: async (id) => {
+    const state = get();
+    const objectToToggle = state.objects.find(obj => obj.id === id);
+    if (!objectToToggle) return;
 
-      // Check if object is in a locked group
-      if (objectToToggle.groupId) {
-        const group = state.groups.find(g => g.id === objectToToggle.groupId);
-        if (group?.locked) return state;
+    // Check if object is in a locked group
+    if (objectToToggle.groupId) {
+      const group = state.groups.find(g => g.id === objectToToggle.groupId);
+      if (group?.locked) return;
+    }
+
+    const newLockState = !objectToToggle.locked;
+
+    // Update in database immediately if we have Firestore ID and project context
+    if (objectToToggle.firestoreId && state.currentProjectId && state.currentUserId) {
+      try {
+        await updateObject(
+          objectToToggle.firestoreId, 
+          { locked: newLockState }, 
+          state.currentUserId, 
+          state.currentProjectId
+        );
+        console.log(`Object "${objectToToggle.name}" lock state updated in database`);
+      } catch (error) {
+        console.error('Failed to update object lock state in database:', error);
       }
+    }
 
-      const updatedObjects = state.objects.map((obj) =>
-        obj.id === id ? { ...obj, locked: !obj.locked } : obj
-      );
-      
-      const toggledObject = updatedObjects.find((obj) => obj.id === id);
-      
-      // Clear selection if selected object becomes locked
-      const newSelectedObject = (toggledObject && toggledObject.locked && toggledObject.object === state.selectedObject)
-        ? null
-        : state.selectedObject;
+    // Update local state
+    const updatedObjects = state.objects.map((obj) =>
+      obj.id === id ? { ...obj, locked: newLockState } : obj
+    );
+    
+    const toggledObject = updatedObjects.find((obj) => obj.id === id);
+    const newSelectedObject = (toggledObject && toggledObject.locked && toggledObject.object === state.selectedObject)
+      ? null
+      : state.selectedObject;
 
-      get().markUnsavedChanges();
+    set({
+      objects: updatedObjects,
+      selectedObject: newSelectedObject,
+    });
 
-      return {
-        objects: updatedObjects,
-        selectedObject: newSelectedObject,
-      };
-    }),
+    get().markUnsavedChanges();
+  },
 
-  updateObjectName: (id, name) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const objectToUpdate = state.objects.find(obj => obj.id === id);
-      if (!objectToUpdate) return state;
+  updateObjectName: async (id, name) => {
+    const state = get();
+    const objectToUpdate = state.objects.find(obj => obj.id === id);
+    if (!objectToUpdate) return;
 
-      // Check if object is locked
-      if (objectToUpdate.locked) return state;
+    // Check if object is locked
+    if (objectToUpdate.locked) return;
 
-      // Check if object is in a locked group
-      if (objectToUpdate.groupId) {
-        const group = state.groups.find(g => g.id === objectToUpdate.groupId);
-        if (group?.locked) return state;
+    // Check if object is in a locked group
+    if (objectToUpdate.groupId) {
+      const group = state.groups.find(g => g.id === objectToUpdate.groupId);
+      if (group?.locked) return;
+    }
+
+    // Update in database immediately if we have Firestore ID and project context
+    if (objectToUpdate.firestoreId && state.currentProjectId && state.currentUserId) {
+      try {
+        await updateObject(
+          objectToUpdate.firestoreId, 
+          { name }, 
+          state.currentUserId, 
+          state.currentProjectId
+        );
+        console.log(`Object name updated in database: "${name}"`);
+      } catch (error) {
+        console.error('Failed to update object name in database:', error);
       }
+    }
 
-      get().markUnsavedChanges();
+    // Update local state
+    set({
+      objects: state.objects.map((obj) =>
+        obj.id === id ? { ...obj, name } : obj
+      ),
+    });
 
-      return {
-        objects: state.objects.map((obj) =>
-          obj.id === id ? { ...obj, name } : obj
-        ),
-      };
-    }),
+    get().markUnsavedChanges();
+  },
 
-  updateObjectProperties: () => {
+  updateObjectProperties: async () => {
+    const { selectedObject, objects, currentProjectId, currentUserId } = get();
+    
+    if (!selectedObject) return;
+
+    const selectedObj = objects.find(obj => obj.object === selectedObject);
+    if (!selectedObj || get().isObjectLocked(selectedObj.id)) return;
+
+    // Update in database immediately if we have Firestore ID and project context
+    if (selectedObj.firestoreId && currentProjectId && currentUserId) {
+      try {
+        const firestoreData = objectToFirestore(selectedObject, selectedObj.name, selectedObj.firestoreId, currentUserId, currentProjectId);
+        firestoreData.visible = selectedObj.visible;
+        firestoreData.locked = selectedObj.locked;
+        if (selectedObj.groupId !== undefined) {
+          firestoreData.groupId = selectedObj.groupId;
+        }
+
+        await updateObject(selectedObj.firestoreId, firestoreData, currentUserId, currentProjectId);
+        console.log(`Object "${selectedObj.name}" properties updated in database`);
+      } catch (error) {
+        console.error('Failed to update object properties in database:', error);
+      }
+    }
+
     get().markUnsavedChanges();
     set((state) => ({ ...state }));
   },
 
-  updateObjectColor: (color) => 
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      if (state.selectedObject instanceof THREE.Mesh) {
-        // Check if selected object is locked
-        const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
-        if (get().isObjectLocked(selectedObj?.id || '')) return state;
+  updateObjectColor: async (color) => {
+    const { selectedObject, objects, currentProjectId, currentUserId } = get();
+    
+    if (selectedObject instanceof THREE.Mesh) {
+      // Check if selected object is locked
+      const selectedObj = objects.find(obj => obj.object === selectedObject);
+      if (get().isObjectLocked(selectedObj?.id || '')) return;
 
-        const material = state.selectedObject.material as THREE.MeshStandardMaterial;
-        material.color.setStyle(color);
-        material.needsUpdate = true;
-        
-        get().markUnsavedChanges();
+      const material = selectedObject.material as THREE.MeshStandardMaterial;
+      material.color.setStyle(color);
+      material.needsUpdate = true;
+
+      // Update in database immediately if we have Firestore ID and project context
+      if (selectedObj?.firestoreId && currentProjectId && currentUserId) {
+        try {
+          await updateObject(
+            selectedObj.firestoreId, 
+            { color }, 
+            currentUserId, 
+            currentProjectId
+          );
+          console.log(`Object "${selectedObj.name}" color updated in database`);
+        } catch (error) {
+          console.error('Failed to update object color in database:', error);
+        }
       }
-      return state;
-    }),
-
-  updateObjectOpacity: (opacity) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
       
-      if (state.selectedObject instanceof THREE.Mesh) {
-        // Check if selected object is locked
-        const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
-        if (get().isObjectLocked(selectedObj?.id || '')) return state;
+      get().markUnsavedChanges();
+    }
+  },
 
-        const material = state.selectedObject.material as THREE.MeshStandardMaterial;
-        material.transparent = opacity < 1;
-        material.opacity = opacity;
-        material.needsUpdate = true;
-        
-        get().markUnsavedChanges();
+  updateObjectOpacity: async (opacity) => {
+    const { selectedObject, objects, currentProjectId, currentUserId } = get();
+    
+    if (selectedObject instanceof THREE.Mesh) {
+      // Check if selected object is locked
+      const selectedObj = objects.find(obj => obj.object === selectedObject);
+      if (get().isObjectLocked(selectedObj?.id || '')) return;
+
+      const material = selectedObject.material as THREE.MeshStandardMaterial;
+      material.transparent = opacity < 1;
+      material.opacity = opacity;
+      material.needsUpdate = true;
+
+      // Update in database immediately if we have Firestore ID and project context
+      if (selectedObj?.firestoreId && currentProjectId && currentUserId) {
+        try {
+          await updateObject(
+            selectedObj.firestoreId, 
+            { opacity }, 
+            currentUserId, 
+            currentProjectId
+          );
+          console.log(`Object "${selectedObj.name}" opacity updated in database`);
+        } catch (error) {
+          console.error('Failed to update object opacity in database:', error);
+        }
       }
-      return state;
-    }),
+      
+      get().markUnsavedChanges();
+    }
+  },
 
   setSelectedElements: (type, indices) =>
     set((state) => ({
@@ -999,7 +1013,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   startVertexDrag: (index, position) =>
     set((state) => {
-      if (!state.currentProjectId || !(state.selectedObject instanceof THREE.Mesh)) return state;
+      if (!(state.selectedObject instanceof THREE.Mesh)) return state;
 
       // Check if selected object is locked
       const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
@@ -1040,7 +1054,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   updateVertexDrag: (position) =>
     set((state) => {
-      if (!state.currentProjectId || !state.draggedVertex || !(state.selectedObject instanceof THREE.Mesh)) return state;
+      if (!state.draggedVertex || !(state.selectedObject instanceof THREE.Mesh)) return state;
 
       // Check if selected object is locked
       const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
@@ -1072,12 +1086,13 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   endVertexDrag: () => {
     get().saveToHistory();
+    get().updateObjectProperties(); // This will save to database
     set({ draggedVertex: null });
   },
 
   startEdgeDrag: (vertexIndices, positions, midpoint) =>
     set((state) => {
-      if (!state.currentProjectId || !(state.selectedObject instanceof THREE.Mesh)) return state;
+      if (!(state.selectedObject instanceof THREE.Mesh)) return state;
 
       // Check if selected object is locked
       const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
@@ -1145,7 +1160,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   updateEdgeDrag: (position) =>
     set((state) => {
-      if (!state.currentProjectId || !state.draggedEdge || !(state.selectedObject instanceof THREE.Mesh)) return state;
+      if (!state.draggedEdge || !(state.selectedObject instanceof THREE.Mesh)) return state;
 
       // Check if selected object is locked
       const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
@@ -1179,6 +1194,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   endEdgeDrag: () => {
     get().saveToHistory();
+    get().updateObjectProperties(); // This will save to database
     set({ draggedEdge: null });
   },
 
@@ -1186,7 +1202,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   updateCylinderVertices: (vertexCount) =>
     set((state) => {
-      if (!state.currentProjectId || !(state.selectedObject instanceof THREE.Mesh) || 
+      if (!(state.selectedObject instanceof THREE.Mesh) || 
           !(state.selectedObject.geometry instanceof THREE.CylinderGeometry)) {
         return state;
       }
@@ -1211,6 +1227,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       state.selectedObject.geometry = newGeometry;
 
       get().saveToHistory();
+      get().updateObjectProperties(); // This will save to database
 
       return {
         ...state,
@@ -1224,7 +1241,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   updateSphereVertices: (vertexCount) =>
     set((state) => {
-      if (!state.currentProjectId || !(state.selectedObject instanceof THREE.Mesh) || 
+      if (!(state.selectedObject instanceof THREE.Mesh) || 
           !(state.selectedObject.geometry instanceof THREE.SphereGeometry)) {
         return state;
       }
@@ -1248,6 +1265,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       state.selectedObject.geometry = newGeometry;
 
       get().saveToHistory();
+      get().updateObjectProperties(); // This will save to database
 
       return {
         ...state,
@@ -1260,19 +1278,20 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     }),
 
   // Group management functions
-  createGroup: (name, objectIds = []) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const newGroup: Group = {
-        id: crypto.randomUUID(),
-        name,
-        expanded: true,
-        visible: true,
-        locked: false,
-        objectIds: [...objectIds]
-      };
+  createGroup: async (name, objectIds = []) => {
+    const { currentProjectId, currentUserId } = get();
+    
+    const newGroup: Group = {
+      id: crypto.randomUUID(),
+      name,
+      expanded: true,
+      visible: true,
+      locked: false,
+      objectIds: [...objectIds]
+    };
 
+    // Add to local state immediately
+    set((state) => {
       // Update objects to be part of this group
       const updatedObjects = state.objects.map(obj => 
         objectIds.includes(obj.id) 
@@ -1280,93 +1299,186 @@ export const useSceneStore = create<SceneState>((set, get) => ({
           : obj
       );
 
-      get().saveToHistory();
-
       return {
         groups: [...state.groups, newGroup],
         objects: updatedObjects
       };
-    }),
+    });
 
-  removeGroup: (groupId) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const groupToRemove = state.groups.find(g => g.id === groupId);
-      if (groupToRemove?.locked) return state;
+    // Save to database if we have project context
+    if (currentProjectId && currentUserId) {
+      try {
+        const firestoreGroup: FirestoreGroup = {
+          name: newGroup.name,
+          expanded: newGroup.expanded,
+          visible: newGroup.visible,
+          locked: newGroup.locked,
+          objectIds: newGroup.objectIds
+        };
 
-      // Remove group reference from objects
-      const updatedObjects = state.objects.map(obj => 
-        obj.groupId === groupId 
-          ? { ...obj, groupId: undefined }
-          : obj
-      );
+        const firestoreId = await saveGroup(firestoreGroup, currentUserId, currentProjectId);
+        
+        // Update local group with Firestore ID
+        set((state) => ({
+          groups: state.groups.map(group => 
+            group.id === newGroup.id 
+              ? { ...group, firestoreId }
+              : group
+          )
+        }));
+        
+        console.log(`Group "${name}" saved to database with ID: ${firestoreId}`);
+      } catch (error) {
+        console.error('Failed to save group to database:', error);
+      }
+    }
 
-      get().saveToHistory();
+    get().saveToHistory();
+  },
 
-      return {
-        groups: state.groups.filter(group => group.id !== groupId),
-        objects: updatedObjects
-      };
-    }),
+  removeGroup: async (groupId) => {
+    const state = get();
+    const groupToRemove = state.groups.find(g => g.id === groupId);
+    if (!groupToRemove || groupToRemove.locked) return;
 
-  addObjectToGroup: (objectId, groupId) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const objectToMove = state.objects.find(obj => obj.id === objectId);
-      const targetGroup = state.groups.find(g => g.id === groupId);
-      
-      // Check if object is locked or target group is locked
-      if (objectToMove?.locked || targetGroup?.locked) return state;
+    // Remove from database immediately if we have Firestore ID and project context
+    if (groupToRemove.firestoreId && state.currentProjectId) {
+      try {
+        await deleteGroup(groupToRemove.firestoreId, state.currentProjectId);
+        console.log(`Group "${groupToRemove.name}" deleted from database`);
+      } catch (error) {
+        console.error('Failed to delete group from database:', error);
+      }
+    }
 
-      const updatedObjects = state.objects.map(obj =>
-        obj.id === objectId ? { ...obj, groupId } : obj
-      );
+    // Remove group reference from objects
+    const updatedObjects = state.objects.map(obj => 
+      obj.groupId === groupId 
+        ? { ...obj, groupId: undefined }
+        : obj
+    );
 
-      const updatedGroups = state.groups.map(group =>
-        group.id === groupId 
-          ? { ...group, objectIds: [...group.objectIds, objectId] }
-          : group
-      );
+    set({
+      groups: state.groups.filter(group => group.id !== groupId),
+      objects: updatedObjects
+    });
 
-      get().markUnsavedChanges();
+    get().saveToHistory();
+  },
 
-      return {
-        objects: updatedObjects,
-        groups: updatedGroups
-      };
-    }),
+  addObjectToGroup: async (objectId, groupId) => {
+    const state = get();
+    const objectToMove = state.objects.find(obj => obj.id === objectId);
+    const targetGroup = state.groups.find(g => g.id === groupId);
+    
+    // Check if object is locked or target group is locked
+    if (objectToMove?.locked || targetGroup?.locked) return;
 
-  removeObjectFromGroup: (objectId) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const obj = state.objects.find(o => o.id === objectId);
-      if (!obj?.groupId) return state;
+    // Update local state
+    const updatedObjects = state.objects.map(obj =>
+      obj.id === objectId ? { ...obj, groupId } : obj
+    );
 
-      const group = state.groups.find(g => g.id === obj.groupId);
-      
-      // Check if object is locked or group is locked
-      if (obj.locked || group?.locked) return state;
+    const updatedGroups = state.groups.map(group =>
+      group.id === groupId 
+        ? { ...group, objectIds: [...group.objectIds, objectId] }
+        : group
+    );
 
-      const updatedObjects = state.objects.map(o =>
-        o.id === objectId ? { ...o, groupId: undefined } : o
-      );
+    set({
+      objects: updatedObjects,
+      groups: updatedGroups
+    });
 
-      const updatedGroups = state.groups.map(group =>
-        group.id === obj.groupId
-          ? { ...group, objectIds: group.objectIds.filter(id => id !== objectId) }
-          : group
-      );
+    // Update in database if we have project context
+    if (objectToMove?.firestoreId && state.currentProjectId && state.currentUserId) {
+      try {
+        await updateObject(
+          objectToMove.firestoreId, 
+          { groupId }, 
+          state.currentUserId, 
+          state.currentProjectId
+        );
+        console.log(`Object "${objectToMove.name}" moved to group in database`);
+      } catch (error) {
+        console.error('Failed to update object group in database:', error);
+      }
+    }
 
-      get().markUnsavedChanges();
+    if (targetGroup?.firestoreId && state.currentProjectId && state.currentUserId) {
+      try {
+        await updateGroup(
+          targetGroup.firestoreId, 
+          { objectIds: [...targetGroup.objectIds, objectId] }, 
+          state.currentUserId, 
+          state.currentProjectId
+        );
+        console.log(`Group "${targetGroup.name}" updated in database`);
+      } catch (error) {
+        console.error('Failed to update group in database:', error);
+      }
+    }
 
-      return {
-        objects: updatedObjects,
-        groups: updatedGroups
-      };
-    }),
+    get().markUnsavedChanges();
+  },
+
+  removeObjectFromGroup: async (objectId) => {
+    const state = get();
+    const obj = state.objects.find(o => o.id === objectId);
+    if (!obj?.groupId) return;
+
+    const group = state.groups.find(g => g.id === obj.groupId);
+    
+    // Check if object is locked or group is locked
+    if (obj.locked || group?.locked) return;
+
+    // Update local state
+    const updatedObjects = state.objects.map(o =>
+      o.id === objectId ? { ...o, groupId: undefined } : o
+    );
+
+    const updatedGroups = state.groups.map(group =>
+      group.id === obj.groupId
+        ? { ...group, objectIds: group.objectIds.filter(id => id !== objectId) }
+        : group
+    );
+
+    set({
+      objects: updatedObjects,
+      groups: updatedGroups
+    });
+
+    // Update in database if we have project context
+    if (obj.firestoreId && state.currentProjectId && state.currentUserId) {
+      try {
+        await updateObject(
+          obj.firestoreId, 
+          { groupId: null }, 
+          state.currentUserId, 
+          state.currentProjectId
+        );
+        console.log(`Object "${obj.name}" removed from group in database`);
+      } catch (error) {
+        console.error('Failed to update object group in database:', error);
+      }
+    }
+
+    if (group?.firestoreId && state.currentProjectId && state.currentUserId) {
+      try {
+        await updateGroup(
+          group.firestoreId, 
+          { objectIds: group.objectIds.filter(id => id !== objectId) }, 
+          state.currentUserId, 
+          state.currentProjectId
+        );
+        console.log(`Group "${group.name}" updated in database`);
+      } catch (error) {
+        console.error('Failed to update group in database:', error);
+      }
+    }
+
+    get().markUnsavedChanges();
+  },
 
   toggleGroupExpanded: (groupId) =>
     set((state) => ({
@@ -1375,138 +1487,199 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       )
     })),
 
-  toggleGroupVisibility: (groupId) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const group = state.groups.find(g => g.id === groupId);
-      if (!group || group.locked) return state;
+  toggleGroupVisibility: async (groupId) => {
+    const state = get();
+    const group = state.groups.find(g => g.id === groupId);
+    if (!group || group.locked) return;
 
-      const newVisibility = !group.visible;
+    const newVisibility = !group.visible;
 
-      // Update group visibility
-      const updatedGroups = state.groups.map(g =>
-        g.id === groupId ? { ...g, visible: newVisibility } : g
-      );
+    // Update group visibility
+    const updatedGroups = state.groups.map(g =>
+      g.id === groupId ? { ...g, visible: newVisibility } : g
+    );
 
-      // Update all objects in the group
-      const updatedObjects = state.objects.map(obj =>
-        group.objectIds.includes(obj.id) 
-          ? { ...obj, visible: newVisibility }
-          : obj
-      );
+    // Update all objects in the group
+    const updatedObjects = state.objects.map(obj =>
+      group.objectIds.includes(obj.id) 
+        ? { ...obj, visible: newVisibility }
+        : obj
+    );
 
-      // Clear selection if selected object becomes invisible
-      const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
-      const newSelectedObject = (selectedObj && group.objectIds.includes(selectedObj.id) && !newVisibility)
-        ? null
-        : state.selectedObject;
+    // Clear selection if selected object becomes invisible
+    const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
+    const newSelectedObject = (selectedObj && group.objectIds.includes(selectedObj.id) && !newVisibility)
+      ? null
+      : state.selectedObject;
 
-      get().markUnsavedChanges();
+    set({
+      groups: updatedGroups,
+      objects: updatedObjects,
+      selectedObject: newSelectedObject
+    });
 
-      return {
-        groups: updatedGroups,
-        objects: updatedObjects,
-        selectedObject: newSelectedObject
-      };
-    }),
+    // Update in database if we have project context
+    if (group.firestoreId && state.currentProjectId && state.currentUserId) {
+      try {
+        await updateGroup(
+          group.firestoreId, 
+          { visible: newVisibility }, 
+          state.currentUserId, 
+          state.currentProjectId
+        );
+        console.log(`Group "${group.name}" visibility updated in database`);
+      } catch (error) {
+        console.error('Failed to update group visibility in database:', error);
+      }
+    }
 
-  toggleGroupLock: (groupId) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const group = state.groups.find(g => g.id === groupId);
-      if (!group) return state;
+    get().markUnsavedChanges();
+  },
 
-      const newLockState = !group.locked;
+  toggleGroupLock: async (groupId) => {
+    const state = get();
+    const group = state.groups.find(g => g.id === groupId);
+    if (!group) return;
 
-      // Update group lock state
-      const updatedGroups = state.groups.map(g =>
-        g.id === groupId ? { ...g, locked: newLockState } : g
-      );
+    const newLockState = !group.locked;
 
-      // Clear selection if selected object is in a group that becomes locked
-      const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
-      const newSelectedObject = (selectedObj && group.objectIds.includes(selectedObj.id) && newLockState)
-        ? null
-        : state.selectedObject;
+    // Update group lock state
+    const updatedGroups = state.groups.map(g =>
+      g.id === groupId ? { ...g, locked: newLockState } : g
+    );
 
-      get().markUnsavedChanges();
+    // Clear selection if selected object is in a group that becomes locked
+    const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
+    const newSelectedObject = (selectedObj && group.objectIds.includes(selectedObj.id) && newLockState)
+      ? null
+      : state.selectedObject;
 
-      return {
-        groups: updatedGroups,
-        selectedObject: newSelectedObject
-      };
-    }),
+    set({
+      groups: updatedGroups,
+      selectedObject: newSelectedObject
+    });
 
-  updateGroupName: (groupId, name) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const group = state.groups.find(g => g.id === groupId);
-      if (group?.locked) return state;
+    // Update in database if we have project context
+    if (group.firestoreId && state.currentProjectId && state.currentUserId) {
+      try {
+        await updateGroup(
+          group.firestoreId, 
+          { locked: newLockState }, 
+          state.currentUserId, 
+          state.currentProjectId
+        );
+        console.log(`Group "${group.name}" lock state updated in database`);
+      } catch (error) {
+        console.error('Failed to update group lock state in database:', error);
+      }
+    }
 
-      get().markUnsavedChanges();
+    get().markUnsavedChanges();
+  },
 
-      return {
-        groups: state.groups.map(group =>
-          group.id === groupId ? { ...group, name } : group
+  updateGroupName: async (groupId, name) => {
+    const state = get();
+    const group = state.groups.find(g => g.id === groupId);
+    if (group?.locked) return;
+
+    // Update local state
+    set({
+      groups: state.groups.map(group =>
+        group.id === groupId ? { ...group, name } : group
+      )
+    });
+
+    // Update in database if we have project context
+    if (group?.firestoreId && state.currentProjectId && state.currentUserId) {
+      try {
+        await updateGroup(
+          group.firestoreId, 
+          { name }, 
+          state.currentUserId, 
+          state.currentProjectId
+        );
+        console.log(`Group name updated in database: "${name}"`);
+      } catch (error) {
+        console.error('Failed to update group name in database:', error);
+      }
+    }
+
+    get().markUnsavedChanges();
+  },
+
+  moveObjectsToGroup: async (objectIds, groupId) => {
+    const state = get();
+    
+    // Check if any objects are locked
+    const lockedObjects = objectIds.filter(id => {
+      const obj = state.objects.find(o => o.id === id);
+      return obj?.locked || (obj?.groupId && state.groups.find(g => g.id === obj.groupId)?.locked);
+    });
+
+    if (lockedObjects.length > 0) return;
+
+    // Check if target group is locked
+    if (groupId) {
+      const targetGroup = state.groups.find(g => g.id === groupId);
+      if (targetGroup?.locked) return;
+    }
+
+    // Remove objects from their current groups
+    const updatedGroups = state.groups.map(group => ({
+      ...group,
+      objectIds: group.objectIds.filter(id => !objectIds.includes(id))
+    }));
+
+    // Add objects to the new group if specified
+    const finalGroups = groupId 
+      ? updatedGroups.map(group =>
+          group.id === groupId
+            ? { ...group, objectIds: [...group.objectIds, ...objectIds] }
+            : group
         )
-      };
-    }),
+      : updatedGroups;
 
-  moveObjectsToGroup: (objectIds, groupId) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      // Check if any objects are locked
-      const lockedObjects = objectIds.filter(id => {
-        const obj = state.objects.find(o => o.id === id);
-        return obj?.locked || (obj?.groupId && state.groups.find(g => g.id === obj.groupId)?.locked);
+    // Update objects
+    const updatedObjects = state.objects.map(obj =>
+      objectIds.includes(obj.id) 
+        ? { ...obj, groupId }
+        : obj
+    );
+
+    set({
+      groups: finalGroups,
+      objects: updatedObjects
+    });
+
+    // Update objects in database
+    if (state.currentProjectId && state.currentUserId) {
+      const updatePromises = objectIds.map(async (objectId) => {
+        const obj = state.objects.find(o => o.id === objectId);
+        if (obj?.firestoreId) {
+          try {
+            await updateObject(
+              obj.firestoreId, 
+              { groupId }, 
+              state.currentUserId, 
+              state.currentProjectId
+            );
+          } catch (error) {
+            console.error(`Failed to update object ${obj.name} group in database:`, error);
+          }
+        }
       });
 
-      if (lockedObjects.length > 0) return state;
+      await Promise.all(updatePromises);
+      console.log(`Moved ${objectIds.length} objects to ${groupId ? 'group' : 'no group'} in database`);
+    }
 
-      // Check if target group is locked
-      if (groupId) {
-        const targetGroup = state.groups.find(g => g.id === groupId);
-        if (targetGroup?.locked) return state;
-      }
-
-      // Remove objects from their current groups
-      const updatedGroups = state.groups.map(group => ({
-        ...group,
-        objectIds: group.objectIds.filter(id => !objectIds.includes(id))
-      }));
-
-      // Add objects to the new group if specified
-      const finalGroups = groupId 
-        ? updatedGroups.map(group =>
-            group.id === groupId
-              ? { ...group, objectIds: [...group.objectIds, ...objectIds] }
-              : group
-          )
-        : updatedGroups;
-
-      // Update objects
-      const updatedObjects = state.objects.map(obj =>
-        objectIds.includes(obj.id) 
-          ? { ...obj, groupId }
-          : obj
-      );
-
-      get().markUnsavedChanges();
-
-      return {
-        groups: finalGroups,
-        objects: updatedObjects
-      };
-    }),
+    get().markUnsavedChanges();
+  },
 
   // New action functions
   undo: () =>
     set((state) => {
-      if (!state.currentProjectId || state.historyIndex <= 0) return state;
+      if (state.historyIndex <= 0) return state;
 
       const previousState = state.history[state.historyIndex - 1];
       
@@ -1528,7 +1701,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   redo: () =>
     set((state) => {
-      if (!state.currentProjectId || state.historyIndex >= state.history.length - 1) return state;
+      if (state.historyIndex >= state.history.length - 1) return state;
 
       const nextState = state.history[state.historyIndex + 1];
       
@@ -1548,26 +1721,28 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       };
     }),
 
-  duplicateObject: () =>
+  duplicateObject: async () => {
+    const state = get();
+    if (!state.selectedObject) return;
+
+    // Check if selected object is locked
+    const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
+    if (!selectedObj || get().isObjectLocked(selectedObj.id)) return;
+
+    const clonedObject = cloneObject(state.selectedObject);
+    clonedObject.position.x += 1; // Offset the duplicate
+
+    const newObject = {
+      id: crypto.randomUUID(),
+      object: clonedObject,
+      name: `${selectedObj.name} Copy`,
+      visible: true,
+      locked: false,
+      groupId: selectedObj.groupId
+    };
+
+    // Add to local state
     set((state) => {
-      if (!state.currentProjectId || !state.selectedObject) return state;
-
-      // Check if selected object is locked
-      const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
-      if (!selectedObj || get().isObjectLocked(selectedObj.id)) return state;
-
-      const clonedObject = cloneObject(state.selectedObject);
-      clonedObject.position.x += 1; // Offset the duplicate
-
-      const newObject = {
-        id: crypto.randomUUID(),
-        object: clonedObject,
-        name: `${selectedObj.name} Copy`,
-        visible: true,
-        locked: false,
-        groupId: selectedObj.groupId
-      };
-
       // Update group if object belongs to one
       let updatedGroups = state.groups;
       if (selectedObj.groupId) {
@@ -1578,30 +1753,59 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         );
       }
 
-      get().saveToHistory();
-
       return {
         objects: [...state.objects, newObject],
         groups: updatedGroups,
         selectedObject: clonedObject
       };
-    }),
+    });
 
-  mirrorObject: () =>
-    set((state) => {
-      if (!state.currentProjectId || !state.selectedObject) return state;
+    // Save to database if we have project context
+    if (state.currentProjectId && state.currentUserId) {
+      try {
+        const firestoreData = objectToFirestore(clonedObject, newObject.name, undefined, state.currentUserId, state.currentProjectId);
+        firestoreData.visible = true;
+        firestoreData.locked = false;
+        if (newObject.groupId) {
+          firestoreData.groupId = newObject.groupId;
+        }
+        
+        const firestoreId = await saveObject(firestoreData, state.currentUserId, state.currentProjectId);
+        
+        // Update local object with Firestore ID
+        set((state) => ({
+          objects: state.objects.map(obj => 
+            obj.id === newObject.id 
+              ? { ...obj, firestoreId }
+              : obj
+          )
+        }));
+        
+        console.log(`Duplicated object "${newObject.name}" saved to database with ID: ${firestoreId}`);
+      } catch (error) {
+        console.error('Failed to save duplicated object to database:', error);
+      }
+    }
 
-      // Check if selected object is locked
-      const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
-      if (!selectedObj || get().isObjectLocked(selectedObj.id)) return state;
+    get().saveToHistory();
+  },
 
-      // Mirror along X-axis
-      state.selectedObject.scale.x *= -1;
+  mirrorObject: async () => {
+    const state = get();
+    if (!state.selectedObject) return;
 
-      get().saveToHistory();
+    // Check if selected object is locked
+    const selectedObj = state.objects.find(obj => obj.object === state.selectedObject);
+    if (!selectedObj || get().isObjectLocked(selectedObj.id)) return;
 
-      return state;
-    }),
+    // Mirror along X-axis
+    state.selectedObject.scale.x *= -1;
+
+    // Update in database
+    await get().updateObjectProperties();
+
+    get().saveToHistory();
+  },
 
   zoomIn: () =>
     set((state) => {
@@ -1621,62 +1825,48 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   // Enhanced placement functions
   startObjectPlacement: (objectDef) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      return {
-        placementMode: true,
-        pendingObject: objectDef,
-        selectedObject: null,
-        transformMode: null,
-        editMode: null
-      };
+    set({
+      placementMode: true,
+      pendingObject: objectDef,
+      selectedObject: null,
+      transformMode: null,
+      editMode: null
     }),
 
-  placeObjectAt: (position, rotation = null) =>
-    set((state) => {
-      if (!state.currentProjectId || !state.pendingObject) return state;
+  placeObjectAt: async (position, rotation = null) => {
+    const state = get();
+    if (!state.pendingObject) return;
 
-      const geometryOrGroup = state.pendingObject.geometry();
-      let object: THREE.Object3D;
+    const geometryOrGroup = state.pendingObject.geometry();
+    let object: THREE.Object3D;
 
-      // Check if it's a THREE.Group or THREE.BufferGeometry
-      if (geometryOrGroup instanceof THREE.Group) {
-        // It's already a complete group, use it directly
-        object = geometryOrGroup;
-      } else {
-        // It's a BufferGeometry, create a mesh with material
-        const material = new THREE.MeshStandardMaterial({ 
-          color: state.pendingObject.color || '#44aa88' 
-        });
-        object = new THREE.Mesh(geometryOrGroup, material);
-      }
+    // Check if it's a THREE.Group or THREE.BufferGeometry
+    if (geometryOrGroup instanceof THREE.Group) {
+      // It's already a complete group, use it directly
+      object = geometryOrGroup;
+    } else {
+      // It's a BufferGeometry, create a mesh with material
+      const material = new THREE.MeshStandardMaterial({ 
+        color: state.pendingObject.color || '#44aa88' 
+      });
+      object = new THREE.Mesh(geometryOrGroup, material);
+    }
 
-      // Set position and rotation
-      object.position.copy(position);
-      if (rotation) {
-        object.rotation.copy(rotation);
-      }
+    // Set position and rotation
+    object.position.copy(position);
+    if (rotation) {
+      object.rotation.copy(rotation);
+    }
 
-      // Add to scene
-      const newObjects = [...state.objects, { 
-        id: crypto.randomUUID(), 
-        object, 
-        name: state.pendingObject.name, 
-        visible: true, 
-        locked: false 
-      }];
+    // Add to scene using the regular addObject method which handles database saving
+    await get().addObject(object, state.pendingObject.name);
 
-      // Save to history after adding
-      setTimeout(() => get().saveToHistory(), 0);
-
-      return {
-        objects: newObjects,
-        placementMode: false,
-        pendingObject: null,
-        selectedObject: object
-      };
-    }),
+    set({
+      placementMode: false,
+      pendingObject: null,
+      selectedObject: object
+    });
+  },
 
   cancelObjectPlacement: () =>
     set({
@@ -1685,117 +1875,198 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     }),
 
   // Light management functions
-  addLight: (type, position = [2, 2, 2]) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const lightCount = state.lights.filter(l => l.type === type).length;
-      const newLight: Light = {
-        id: crypto.randomUUID(),
-        name: `${type.charAt(0).toUpperCase() + type.slice(1)} Light ${lightCount + 1}`,
-        type,
-        position: [...position],
-        target: [0, 0, 0],
-        intensity: 1,
-        color: '#ffffff',
-        visible: true,
-        castShadow: true,
-        distance: type === 'directional' ? 0 : 10,
-        decay: 2,
-        angle: Math.PI / 3,
-        penumbra: 0,
-        object: createLight(type, position, [0, 0, 0])
-      };
+  addLight: async (type, position = [2, 2, 2]) => {
+    const { lights, currentProjectId, currentUserId } = get();
+    
+    const lightCount = lights.filter(l => l.type === type).length;
+    const newLight: Light = {
+      id: crypto.randomUUID(),
+      name: `${type.charAt(0).toUpperCase() + type.slice(1)} Light ${lightCount + 1}`,
+      type,
+      position: [...position],
+      target: [0, 0, 0],
+      intensity: 1,
+      color: '#ffffff',
+      visible: true,
+      castShadow: true,
+      distance: type === 'directional' ? 0 : 10,
+      decay: 2,
+      angle: Math.PI / 3,
+      penumbra: 0,
+      object: createLight(type, position, [0, 0, 0])
+    };
 
-      get().saveToHistory();
+    // Add to local state
+    set((state) => ({
+      lights: [...state.lights, newLight],
+      selectedLight: newLight
+    }));
 
-      return {
-        lights: [...state.lights, newLight],
-        selectedLight: newLight
-      };
-    }),
+    // Save to database if we have project context
+    if (currentProjectId && currentUserId) {
+      try {
+        const firestoreLight: FirestoreLight = {
+          name: newLight.name,
+          type: newLight.type,
+          position: newLight.position,
+          target: newLight.target,
+          intensity: newLight.intensity,
+          color: newLight.color,
+          visible: newLight.visible,
+          castShadow: newLight.castShadow,
+          distance: newLight.distance,
+          decay: newLight.decay,
+          angle: newLight.angle,
+          penumbra: newLight.penumbra
+        };
 
-  removeLight: (lightId) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const updatedLights = state.lights.filter(light => light.id !== lightId);
-      
-      get().saveToHistory();
-
-      return {
-        lights: updatedLights,
-        selectedLight: state.selectedLight?.id === lightId ? null : state.selectedLight
-      };
-    }),
-
-  updateLight: (lightId, properties) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const updatedLights = state.lights.map(light => {
-        if (light.id === lightId) {
-          const updatedLight = { ...light, ...properties };
-          
-          // Update the THREE.js light object
-          if (updatedLight.object) {
-            const threeLight = updatedLight.object;
-            
-            // Update common properties
-            threeLight.intensity = updatedLight.intensity;
-            threeLight.color.setStyle(updatedLight.color);
-            threeLight.visible = updatedLight.visible;
-            threeLight.castShadow = updatedLight.castShadow;
-            threeLight.position.set(...updatedLight.position);
-            
-            // Update type-specific properties
-            if (updatedLight.type === 'directional' && threeLight instanceof THREE.DirectionalLight) {
-              threeLight.target.position.set(...updatedLight.target);
-            } else if (updatedLight.type === 'point' && threeLight instanceof THREE.PointLight) {
-              threeLight.distance = updatedLight.distance;
-              threeLight.decay = updatedLight.decay;
-            } else if (updatedLight.type === 'spot' && threeLight instanceof THREE.SpotLight) {
-              threeLight.target.position.set(...updatedLight.target);
-              threeLight.distance = updatedLight.distance;
-              threeLight.decay = updatedLight.decay;
-              threeLight.angle = updatedLight.angle;
-              threeLight.penumbra = updatedLight.penumbra;
-            }
-          }
-          
-          return updatedLight;
-        }
-        return light;
-      });
-
-      get().markUnsavedChanges();
-
-      return {
-        lights: updatedLights,
-        selectedLight: state.selectedLight?.id === lightId 
-          ? updatedLights.find(l => l.id === lightId) || null
-          : state.selectedLight
-      };
-    }),
-
-  toggleLightVisibility: (lightId) =>
-    set((state) => {
-      if (!state.currentProjectId) return state;
-      
-      const updatedLights = state.lights.map(light =>
-        light.id === lightId ? { ...light, visible: !light.visible } : light
-      );
-
-      // Update the THREE.js object
-      const light = updatedLights.find(l => l.id === lightId);
-      if (light?.object) {
-        light.object.visible = light.visible;
+        const firestoreId = await saveLight(firestoreLight, currentUserId, currentProjectId);
+        
+        // Update local light with Firestore ID
+        set((state) => ({
+          lights: state.lights.map(light => 
+            light.id === newLight.id 
+              ? { ...light, firestoreId }
+              : light
+          )
+        }));
+        
+        console.log(`Light "${newLight.name}" saved to database with ID: ${firestoreId}`);
+      } catch (error) {
+        console.error('Failed to save light to database:', error);
       }
+    }
 
-      get().markUnsavedChanges();
+    get().saveToHistory();
+  },
 
-      return { lights: updatedLights };
-    }),
+  removeLight: async (lightId) => {
+    const state = get();
+    const lightToRemove = state.lights.find(light => light.id === lightId);
+    
+    if (!lightToRemove) return;
+
+    // Remove from database immediately if we have Firestore ID and project context
+    if (lightToRemove.firestoreId && state.currentProjectId) {
+      try {
+        await deleteLight(lightToRemove.firestoreId, state.currentProjectId);
+        console.log(`Light "${lightToRemove.name}" deleted from database`);
+      } catch (error) {
+        console.error('Failed to delete light from database:', error);
+      }
+    }
+
+    // Remove from local state
+    const updatedLights = state.lights.filter(light => light.id !== lightId);
+    
+    set({
+      lights: updatedLights,
+      selectedLight: state.selectedLight?.id === lightId ? null : state.selectedLight
+    });
+
+    get().saveToHistory();
+  },
+
+  updateLight: async (lightId, properties) => {
+    const { lights, currentProjectId, currentUserId } = get();
+    
+    const updatedLights = lights.map(light => {
+      if (light.id === lightId) {
+        const updatedLight = { ...light, ...properties };
+        
+        // Update the THREE.js light object
+        if (updatedLight.object) {
+          const threeLight = updatedLight.object;
+          
+          // Update common properties
+          threeLight.intensity = updatedLight.intensity;
+          threeLight.color.setStyle(updatedLight.color);
+          threeLight.visible = updatedLight.visible;
+          threeLight.castShadow = updatedLight.castShadow;
+          threeLight.position.set(...updatedLight.position);
+          
+          // Update type-specific properties
+          if (updatedLight.type === 'directional' && threeLight instanceof THREE.DirectionalLight) {
+            threeLight.target.position.set(...updatedLight.target);
+          } else if (updatedLight.type === 'point' && threeLight instanceof THREE.PointLight) {
+            threeLight.distance = updatedLight.distance;
+            threeLight.decay = updatedLight.decay;
+          } else if (updatedLight.type === 'spot' && threeLight instanceof THREE.SpotLight) {
+            threeLight.target.position.set(...updatedLight.target);
+            threeLight.distance = updatedLight.distance;
+            threeLight.decay = updatedLight.decay;
+            threeLight.angle = updatedLight.angle;
+            threeLight.penumbra = updatedLight.penumbra;
+          }
+        }
+        
+        return updatedLight;
+      }
+      return light;
+    });
+
+    set({
+      lights: updatedLights,
+      selectedLight: get().selectedLight?.id === lightId 
+        ? updatedLights.find(l => l.id === lightId) || null
+        : get().selectedLight
+    });
+
+    // Update in database if we have project context
+    const lightToUpdate = lights.find(l => l.id === lightId);
+    if (lightToUpdate?.firestoreId && currentProjectId && currentUserId) {
+      try {
+        const firestoreLight: Partial<FirestoreLight> = {
+          ...properties
+        };
+
+        await updateLight(lightToUpdate.firestoreId, firestoreLight, currentUserId, currentProjectId);
+        console.log(`Light "${lightToUpdate.name}" updated in database`);
+      } catch (error) {
+        console.error('Failed to update light in database:', error);
+      }
+    }
+
+    get().markUnsavedChanges();
+  },
+
+  toggleLightVisibility: async (lightId) => {
+    const { lights, currentProjectId, currentUserId } = get();
+    
+    const lightToToggle = lights.find(l => l.id === lightId);
+    if (!lightToToggle) return;
+
+    const newVisibility = !lightToToggle.visible;
+
+    const updatedLights = lights.map(light =>
+      light.id === lightId ? { ...light, visible: newVisibility } : light
+    );
+
+    // Update the THREE.js object
+    const light = updatedLights.find(l => l.id === lightId);
+    if (light?.object) {
+      light.object.visible = light.visible;
+    }
+
+    set({ lights: updatedLights });
+
+    // Update in database if we have project context
+    if (lightToToggle.firestoreId && currentProjectId && currentUserId) {
+      try {
+        await updateLight(
+          lightToToggle.firestoreId, 
+          { visible: newVisibility }, 
+          currentUserId, 
+          currentProjectId
+        );
+        console.log(`Light "${lightToToggle.name}" visibility updated in database`);
+      } catch (error) {
+        console.error('Failed to update light visibility in database:', error);
+      }
+    }
+
+    get().markUnsavedChanges();
+  },
 
   setSelectedLight: (light) => set({ selectedLight: light }),
 
