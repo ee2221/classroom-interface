@@ -61,6 +61,7 @@ interface ClassroomState {
   setSortBy: (sortBy: string) => void;
   setViewMode: (mode: 'grid' | 'list') => void;
   setSelectedProjects: (ids: string[]) => void;
+  setCurrentProject: (project: Project | null) => void;
   
   // Project management
   loadProjects: (teacherId: string) => Promise<void>;
@@ -97,6 +98,7 @@ export const useClassroomStore = create<ClassroomState>((set, get) => ({
   setSortBy: (sortBy) => set({ sortBy }),
   setViewMode: (mode) => set({ viewMode: mode }),
   setSelectedProjects: (ids) => set({ selectedProjects: ids }),
+  setCurrentProject: (project) => set({ currentProject: project }),
 
   loadProjects: async (teacherId: string) => {
     set({ loading: true, error: null });
@@ -196,7 +198,10 @@ export const useClassroomStore = create<ClassroomState>((set, get) => ({
           project.id === projectId
             ? { ...project, ...data, updatedAt: new Date() }
             : project
-        )
+        ),
+        currentProject: state.currentProject?.id === projectId
+          ? { ...state.currentProject, ...data, updatedAt: new Date() }
+          : state.currentProject
       }));
     } catch (error) {
       console.error('Error updating project:', error);
@@ -209,7 +214,8 @@ export const useClassroomStore = create<ClassroomState>((set, get) => ({
       await deleteDoc(doc(db, 'classroom_projects', projectId));
       
       set(state => ({
-        projects: state.projects.filter(project => project.id !== projectId)
+        projects: state.projects.filter(project => project.id !== projectId),
+        currentProject: state.currentProject?.id === projectId ? null : state.currentProject
       }));
     } catch (error) {
       console.error('Error deleting project:', error);
