@@ -40,6 +40,8 @@ export interface FirestoreObject {
     indices?: number[];
     normals?: number[];
     uvs?: number[];
+    // Add parameters for standard geometries that might be custom
+    parameters?: any;
   };
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
@@ -113,7 +115,8 @@ const serializeGeometry = (geometry: THREE.BufferGeometry) => {
     vertices: positionAttribute ? Array.from(positionAttribute.array) : [],
     normals: normalAttribute ? Array.from(normalAttribute.array) : [],
     uvs: uvAttribute ? Array.from(uvAttribute.array) : [],
-    indices: indexAttribute ? Array.from(indexAttribute.array) : []
+    indices: indexAttribute ? Array.from(indexAttribute.array) : [],
+    parameters: geometry.parameters || {} // Preserve original parameters if available
   };
 };
 
@@ -137,12 +140,40 @@ const deserializeGeometry = (customGeometry: any): THREE.BufferGeometry => {
     geometry.setIndex(customGeometry.indices);
   }
   
+  // Preserve parameters for potential reconstruction
+  if (customGeometry.parameters) {
+    (geometry as any).parameters = customGeometry.parameters;
+  }
+  
   // Compute normals if they weren't provided
   if (!customGeometry.normals || customGeometry.normals.length === 0) {
     geometry.computeVertexNormals();
   }
   
   return geometry;
+};
+
+// Helper function to determine if a geometry should be treated as custom
+const isCustomGeometry = (geometry: THREE.BufferGeometry, name: string): boolean => {
+  // Check by name patterns
+  const customNames = ['star', 'heart', 'torus', 'custom'];
+  const nameIsCustom = customNames.some(customName => 
+    name.toLowerCase().includes(customName)
+  );
+  
+  // Check by geometry type
+  const isTorusGeometry = geometry instanceof THREE.TorusGeometry;
+  
+  // Check if it's a standard geometry with parameters
+  const hasStandardParams = geometry.parameters && (
+    geometry instanceof THREE.BoxGeometry ||
+    geometry instanceof THREE.SphereGeometry ||
+    geometry instanceof THREE.CylinderGeometry ||
+    geometry instanceof THREE.ConeGeometry
+  );
+  
+  // If it's a torus or has custom name patterns, or doesn't have standard parameters, treat as custom
+  return nameIsCustom || isTorusGeometry || !hasStandardParams;
 };
 
 // Helper function to convert THREE.js object to Firestore format
@@ -198,51 +229,62 @@ export const objectToFirestore = (object: THREE.Object3D, name: string, id?: str
   if (object instanceof THREE.Mesh) {
     const geometry = object.geometry;
     
-    // Handle standard geometries
-    if (geometry instanceof THREE.BoxGeometry) {
-      firestoreObj.geometryParams = {
-        width: geometry.parameters.width ?? 1,
-        height: geometry.parameters.height ?? 1,
-        depth: geometry.parameters.depth ?? 1
+    // Check if this should be treated as a custom geometry
+    if (isCustomGeometry(geometry, name)) {
+      // Serialize the entire geometry for custom shapes
+      firestoreObj.customGeometry = {
+        type: 'custom',
+        ...serializeGeometry(geometry)
       };
-    } else if (geometry instanceof THREE.SphereGeometry) {
-      firestoreObj.geometryParams = {
-        radius: geometry.parameters.radius ?? 0.5,
-        widthSegments: geometry.parameters.widthSegments ?? 32,
-        heightSegments: geometry.parameters.heightSegments ?? 16
-      };
-    } else if (geometry instanceof THREE.CylinderGeometry) {
-      firestoreObj.geometryParams = {
-        radiusTop: geometry.parameters.radiusTop ?? 0.5,
-        radiusBottom: geometry.parameters.radiusBottom ?? 0.5,
-        height: geometry.parameters.height ?? 1,
-        radialSegments: geometry.parameters.radialSegments ?? 32
-      };
-    } else if (geometry instanceof THREE.ConeGeometry) {
-      firestoreObj.geometryParams = {
-        radius: geometry.parameters.radius ?? 0.5,
-        height: geometry.parameters.height ?? 1,
-        radialSegments: geometry.parameters.radialSegments ?? 32
-      };
+      
+      // Mark this as a custom geometry type
+      firestoreObj.type = 'CustomMesh';
+      
+      // For torus geometry, also save the specific type and parameters
+      if (geometry instanceof THREE.TorusGeometry) {
+        firestoreObj.customGeometry.type = 'torus';
+        firestoreObj.customGeometry.parameters = {
+          radius: geometry.parameters.radius,
+          tube: geometry.parameters.tube,
+          radialSegments: geometry.parameters.radialSegments,
+          tubularSegments: geometry.parameters.tubularSegments,
+          arc: geometry.parameters.arc
+        };
+      }
     } else {
-      // Handle custom geometries (like star, heart, etc.)
-      // Check if this is a custom geometry by looking at the object name or other indicators
-      if (name.toLowerCase().includes('star') || 
-          name.toLowerCase().includes('heart') || 
-          name.toLowerCase().includes('custom') ||
-          !geometry.parameters) {
-        
-        // Serialize the entire geometry for custom shapes
+      // Handle standard geometries with parameters
+      if (geometry instanceof THREE.BoxGeometry) {
+        firestoreObj.geometryParams = {
+          width: geometry.parameters.width ?? 1,
+          height: geometry.parameters.height ?? 1,
+          depth: geometry.parameters.depth ?? 1
+        };
+      } else if (geometry instanceof THREE.SphereGeometry) {
+        firestoreObj.geometryParams = {
+          radius: geometry.parameters.radius ?? 0.5,
+          widthSegments: geometry.parameters.widthSegments ?? 32,
+          heightSegments: geometry.parameters.heightSegments ?? 16
+        };
+      } else if (geometry instanceof THREE.CylinderGeometry) {
+        firestoreObj.geometryParams = {
+          radiusTop: geometry.parameters.radiusTop ?? 0.5,
+          radiusBottom: geometry.parameters.radiusBottom ?? 0.5,
+          height: geometry.parameters.height ?? 1,
+          radialSegments: geometry.parameters.radialSegments ?? 32
+        };
+      } else if (geometry instanceof THREE.ConeGeometry) {
+        firestoreObj.geometryParams = {
+          radius: geometry.parameters.radius ?? 0.5,
+          height: geometry.parameters.height ?? 1,
+          radialSegments: geometry.parameters.radialSegments ?? 32
+        };
+      } else {
+        // Fallback: serialize as custom geometry
         firestoreObj.customGeometry = {
           type: 'custom',
           ...serializeGeometry(geometry)
         };
-        
-        // Mark this as a custom geometry type
         firestoreObj.type = 'CustomMesh';
-      } else {
-        // Fallback for unknown standard geometries
-        firestoreObj.geometryParams = geometry.parameters || {};
       }
     }
   }
@@ -259,8 +301,21 @@ export const firestoreToObject = (data: FirestoreObject): THREE.Object3D | null 
     let geometry: THREE.BufferGeometry;
     
     // Handle custom geometries first
-    if (data.customGeometry && data.customGeometry.type === 'custom') {
-      geometry = deserializeGeometry(data.customGeometry);
+    if (data.customGeometry) {
+      if (data.customGeometry.type === 'torus' && data.customGeometry.parameters) {
+        // Reconstruct torus geometry from parameters
+        const params = data.customGeometry.parameters;
+        geometry = new THREE.TorusGeometry(
+          params.radius || 1,
+          params.tube || 0.4,
+          params.radialSegments || 8,
+          params.tubularSegments || 16,
+          params.arc || Math.PI * 2
+        );
+      } else {
+        // Deserialize custom geometry from vertex data
+        geometry = deserializeGeometry(data.customGeometry);
+      }
     } else if (data.geometryParams) {
       // Handle standard geometries
       if (data.geometryParams.width !== undefined) {
