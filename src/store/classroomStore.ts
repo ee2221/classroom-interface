@@ -101,19 +101,44 @@ export const useClassroomStore = create<ClassroomState>((set, get) => ({
   loadProjects: async (teacherId: string) => {
     set({ loading: true, error: null });
     try {
-      const q = query(
-        collection(db, 'classroom_projects'),
-        where('teacherId', '==', teacherId),
-        orderBy('updatedAt', 'desc')
-      );
+      // First, try the optimized query with composite index
+      let projects: Project[] = [];
       
-      const querySnapshot = await getDocs(q);
-      const projects = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        createdAt: doc.data().createdAt?.toDate() || new Date(),
-        updatedAt: doc.data().updatedAt?.toDate() || new Date(),
-      })) as Project[];
+      try {
+        const q = query(
+          collection(db, 'classroom_projects'),
+          where('teacherId', '==', teacherId),
+          orderBy('updatedAt', 'desc')
+        );
+        
+        const querySnapshot = await getDocs(q);
+        projects = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+          createdAt: doc.data().createdAt?.toDate() || new Date(),
+          updatedAt: doc.data().updatedAt?.toDate() || new Date(),
+        })) as Project[];
+      } catch (indexError) {
+        // If composite index doesn't exist, fall back to simple query and sort in memory
+        console.warn('Composite index not available, using fallback query. Please create the index at:', 
+          'https://console.firebase.google.com/v1/r/project/steam-ic-3d-modeling-prototype/firestore/indexes');
+        
+        const q = query(
+          collection(db, 'classroom_projects'),
+          where('teacherId', '==', teacherId)
+        );
+        
+        const querySnapshot = await getDocs(q);
+        projects = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+          createdAt: doc.data().createdAt?.toDate() || new Date(),
+          updatedAt: doc.data().updatedAt?.toDate() || new Date(),
+        })) as Project[];
+        
+        // Sort in memory by updatedAt descending
+        projects.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+      }
 
       set({ projects, loading: false });
     } catch (error) {
