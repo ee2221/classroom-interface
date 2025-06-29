@@ -18,8 +18,8 @@ import { useSceneStore } from './store/sceneStore';
 import { useClassroomStore } from './store/classroomStore';
 
 function App() {
-  const { sceneSettings } = useSceneStore();
-  const { currentProject, setCurrentProject } = useClassroomStore();
+  const { sceneSettings, setCurrentProject } = useSceneStore();
+  const { currentProject, setCurrentProject: setClassroomCurrentProject } = useClassroomStore();
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -34,6 +34,9 @@ function App() {
       if (!user) {
         setShowAuthModal(true);
         setCurrentView('classroom');
+        // Clear project data when user signs out
+        setCurrentProject(null);
+        setClassroomCurrentProject(null);
       } else {
         // Default to classroom view when user signs in
         setCurrentView('classroom');
@@ -41,7 +44,7 @@ function App() {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [setCurrentProject, setClassroomCurrentProject]);
 
   const handleAuthSuccess = () => {
     setShowAuthModal(false);
@@ -52,20 +55,23 @@ function App() {
     setUser(null);
     setShowAuthModal(true);
     setCurrentView('classroom');
+    // Clear all project data when signing out
     setCurrentProject(null);
+    setClassroomCurrentProject(null);
   };
 
   const handleProjectSelect = (projectId: string) => {
-    // In a real implementation, this would:
-    // 1. Set the current project in classroom store
-    // 2. Load project-specific objects, lights, groups into scene store
-    // 3. Apply project-specific settings
-    
-    // For now, we'll simulate setting a current project
+    // Set the current project in both stores
     const selectedProject = useClassroomStore.getState().projects.find(p => p.id === projectId);
     if (selectedProject) {
-      setCurrentProject(selectedProject);
+      setClassroomCurrentProject(selectedProject);
+      // Set the project context in scene store - this will clear all data and prepare for new project
+      setCurrentProject(projectId);
       setCurrentView('studio');
+      
+      // In a full implementation, this would also load the project data from Firestore
+      // For now, we start with a clean slate for each project
+      console.log(`Switched to project: ${selectedProject.name} (${projectId})`);
     }
   };
 
@@ -73,6 +79,7 @@ function App() {
     setCurrentView('classroom');
     // Optionally clear current project or keep it for context
     // setCurrentProject(null);
+    // setClassroomCurrentProject(null);
   };
 
   // Show loading screen while checking auth state
