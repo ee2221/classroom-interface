@@ -33,6 +33,14 @@ export interface FirestoreObject {
   groupId?: string;
   geometryParams?: any;
   materialParams?: any;
+  // Add support for custom geometry data
+  customGeometry?: {
+    type: string;
+    vertices?: number[];
+    indices?: number[];
+    normals?: number[];
+    uvs?: number[];
+  };
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -94,6 +102,49 @@ const getProjectCollections = (projectId: string) => ({
   SCENES: `projects/${projectId}/scenes`
 });
 
+// Helper function to serialize custom geometry
+const serializeGeometry = (geometry: THREE.BufferGeometry) => {
+  const positionAttribute = geometry.attributes.position;
+  const normalAttribute = geometry.attributes.normal;
+  const uvAttribute = geometry.attributes.uv;
+  const indexAttribute = geometry.index;
+
+  return {
+    vertices: positionAttribute ? Array.from(positionAttribute.array) : [],
+    normals: normalAttribute ? Array.from(normalAttribute.array) : [],
+    uvs: uvAttribute ? Array.from(uvAttribute.array) : [],
+    indices: indexAttribute ? Array.from(indexAttribute.array) : []
+  };
+};
+
+// Helper function to deserialize custom geometry
+const deserializeGeometry = (customGeometry: any): THREE.BufferGeometry => {
+  const geometry = new THREE.BufferGeometry();
+  
+  if (customGeometry.vertices && customGeometry.vertices.length > 0) {
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(customGeometry.vertices, 3));
+  }
+  
+  if (customGeometry.normals && customGeometry.normals.length > 0) {
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(customGeometry.normals, 3));
+  }
+  
+  if (customGeometry.uvs && customGeometry.uvs.length > 0) {
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(customGeometry.uvs, 2));
+  }
+  
+  if (customGeometry.indices && customGeometry.indices.length > 0) {
+    geometry.setIndex(customGeometry.indices);
+  }
+  
+  // Compute normals if they weren't provided
+  if (!customGeometry.normals || customGeometry.normals.length === 0) {
+    geometry.computeVertexNormals();
+  }
+  
+  return geometry;
+};
+
 // Helper function to convert THREE.js object to Firestore format
 export const objectToFirestore = (object: THREE.Object3D, name: string, id?: string, userId?: string, projectId?: string): FirestoreObject => {
   const firestoreObj: FirestoreObject = {
@@ -146,6 +197,8 @@ export const objectToFirestore = (object: THREE.Object3D, name: string, id?: str
   // Extract geometry parameters with default values to prevent undefined
   if (object instanceof THREE.Mesh) {
     const geometry = object.geometry;
+    
+    // Handle standard geometries
     if (geometry instanceof THREE.BoxGeometry) {
       firestoreObj.geometryParams = {
         width: geometry.parameters.width ?? 1,
@@ -171,6 +224,26 @@ export const objectToFirestore = (object: THREE.Object3D, name: string, id?: str
         height: geometry.parameters.height ?? 1,
         radialSegments: geometry.parameters.radialSegments ?? 32
       };
+    } else {
+      // Handle custom geometries (like star, heart, etc.)
+      // Check if this is a custom geometry by looking at the object name or other indicators
+      if (name.toLowerCase().includes('star') || 
+          name.toLowerCase().includes('heart') || 
+          name.toLowerCase().includes('custom') ||
+          !geometry.parameters) {
+        
+        // Serialize the entire geometry for custom shapes
+        firestoreObj.customGeometry = {
+          type: 'custom',
+          ...serializeGeometry(geometry)
+        };
+        
+        // Mark this as a custom geometry type
+        firestoreObj.type = 'CustomMesh';
+      } else {
+        // Fallback for unknown standard geometries
+        firestoreObj.geometryParams = geometry.parameters || {};
+      }
     }
   }
 
@@ -182,40 +255,49 @@ export const firestoreToObject = (data: FirestoreObject): THREE.Object3D | null 
   let object: THREE.Object3D | null = null;
 
   // Create geometry based on type and parameters
-  if (data.type === 'Mesh' && data.geometryParams) {
+  if (data.type === 'Mesh' || data.type === 'CustomMesh') {
     let geometry: THREE.BufferGeometry;
     
-    if (data.geometryParams.width !== undefined) {
-      // Box geometry
-      geometry = new THREE.BoxGeometry(
-        data.geometryParams.width,
-        data.geometryParams.height,
-        data.geometryParams.depth
-      );
-    } else if (data.geometryParams.radius !== undefined && data.geometryParams.widthSegments !== undefined) {
-      // Sphere geometry
-      geometry = new THREE.SphereGeometry(
-        data.geometryParams.radius,
-        data.geometryParams.widthSegments,
-        data.geometryParams.heightSegments
-      );
-    } else if (data.geometryParams.radiusTop !== undefined) {
-      // Cylinder geometry
-      geometry = new THREE.CylinderGeometry(
-        data.geometryParams.radiusTop,
-        data.geometryParams.radiusBottom,
-        data.geometryParams.height,
-        data.geometryParams.radialSegments
-      );
-    } else if (data.geometryParams.radius !== undefined && data.geometryParams.radialSegments !== undefined) {
-      // Cone geometry
-      geometry = new THREE.ConeGeometry(
-        data.geometryParams.radius,
-        data.geometryParams.height,
-        data.geometryParams.radialSegments
-      );
+    // Handle custom geometries first
+    if (data.customGeometry && data.customGeometry.type === 'custom') {
+      geometry = deserializeGeometry(data.customGeometry);
+    } else if (data.geometryParams) {
+      // Handle standard geometries
+      if (data.geometryParams.width !== undefined) {
+        // Box geometry
+        geometry = new THREE.BoxGeometry(
+          data.geometryParams.width,
+          data.geometryParams.height,
+          data.geometryParams.depth
+        );
+      } else if (data.geometryParams.radius !== undefined && data.geometryParams.widthSegments !== undefined) {
+        // Sphere geometry
+        geometry = new THREE.SphereGeometry(
+          data.geometryParams.radius,
+          data.geometryParams.widthSegments,
+          data.geometryParams.heightSegments
+        );
+      } else if (data.geometryParams.radiusTop !== undefined) {
+        // Cylinder geometry
+        geometry = new THREE.CylinderGeometry(
+          data.geometryParams.radiusTop,
+          data.geometryParams.radiusBottom,
+          data.geometryParams.height,
+          data.geometryParams.radialSegments
+        );
+      } else if (data.geometryParams.radius !== undefined && data.geometryParams.radialSegments !== undefined) {
+        // Cone geometry
+        geometry = new THREE.ConeGeometry(
+          data.geometryParams.radius,
+          data.geometryParams.height,
+          data.geometryParams.radialSegments
+        );
+      } else {
+        // Default to box
+        geometry = new THREE.BoxGeometry(1, 1, 1);
+      }
     } else {
-      // Default to box
+      // Default to box if no geometry data
       geometry = new THREE.BoxGeometry(1, 1, 1);
     }
 
